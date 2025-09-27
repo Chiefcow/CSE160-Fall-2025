@@ -22,6 +22,10 @@ module Node{
    uses interface SimpleSend as Sender;
 
    uses interface CommandHandler;
+
+   //new interface
+   uses interface NeighborDiscovery as NeighborDiscovery;
+   //uses interface NeighborDiscovery;
 }
 
 implementation{
@@ -32,6 +36,8 @@ implementation{
 
    event void Boot.booted(){
       call AMControl.start();
+      //starting the neighborDiscovery module on start
+      call NeighborDiscovery.start();
 
       dbg(GENERAL_CHANNEL, "Booted\n");
    }

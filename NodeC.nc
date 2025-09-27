@@ -18,6 +18,8 @@ implementation {
     components Node;
     components new AMReceiverC(AM_PACK) as GeneralReceive;
 
+    
+
     Node -> MainC.Boot;
 
     Node.Receive -> GeneralReceive;
@@ -28,6 +30,13 @@ implementation {
     components new SimpleSendC(AM_PACK);
     Node.Sender -> SimpleSendC;
 
+    //look here
     components CommandHandlerC;
     Node.CommandHandler -> CommandHandlerC;
+
+    components NeighborDiscoveryC;
+    Node.NeighborDiscovery -> NeighborDiscoveryC;
+
+    // components NeighborDiscoveryC;
+    // Node.NeighborDiscovery -> SimpleSendC;
 }
