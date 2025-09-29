@@ -6,16 +6,18 @@
 
 
 
- module NeighborDiscoveryP {
-    provides interface NeighborDiscovery;
+ module FloodingP {
+    provides interface Flooding;
     // provides interface SimpleSend;
     // uses interface SimpleSend as Sender;
  }
 
-implementation {
-    command error_t NeighborDiscovery.start() {};
+implementation { 
+    command error_t Flooding.start() {};
 
-    command void NeighborDiscovery.handleNeighbor(pack* message) {};
+    command void Flooding._flood(uint8_t message, uint8_t receive) {};
+
+    command void Flooding.handle_flooding(pack* message) {};
 
 
 }

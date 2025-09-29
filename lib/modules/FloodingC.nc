@@ -12,17 +12,18 @@
 #include "../../includes/packet.h"
 //#include "../../lib/interfaces/SimpleSend.nc"
 
-configuration NeighborDiscoveryC {
-    provides interface NeighborDiscovery;
+configuration FloodingC {
+    provides interface Flooding;
     //provides interface SimpleSend;
     //uses interface SimpleSend as Sender;
 }
 
 implementation {
-    components NeighborDiscoveryP;
-    NeighborDiscovery = NeighborDiscoveryP;
-
+    components FloodingP;
+    Flooding = FloodingP;
+    
     //components new SimpleSendP();
+
     // components new SimpleSendC(AM_PACK);
     // NeighborDiscoveryP.Sender -> SimpleSendC;
     
