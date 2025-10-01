@@ -30,8 +30,8 @@ module Node{
 
 implementation{
    pack sendPackage;
-   static unint16_t lastSeq[256]; // tracks last sequence seen per source - Elvis 
-   static unint16_t seqNo 0; //sequence  number for packets 
+   static uint16_t lastSeq[256]; // tracks last sequence seen per source - Elvis 
+   static uint16_t seqNo = 0; //sequence  number for packets 
    // Prototypes
    void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length);
 
@@ -58,8 +58,8 @@ implementation{
       dbg(GENERAL_CHANNEL, "Packet Received\n"); //This function was changed by me - Elvis 
       if(len==sizeof(pack)){
          pack* myMsg=(pack*) payload;
-         dbg(FLOODING_channel, "Flooding: recived seq=%d from src=%d destined for %d\n", myMsg->seq, myMsg->src, myMsg->dest); // Debug messaging 
-         static unint16_t lastseq[256]; // per-source sequence memory 
+         dbg(FLOODING_CHANNEL, "Flooding: recived seq=%d from src=%d destined for %d\n", myMsg->seq, myMsg->src, myMsg->dest); // Debug messaging 
+         //static uint16_t lastseq[256]; // per-source sequence memory 
          //IF this method fails best try a hashmap never can go wrong with that - Elvis
          if(myMsg->seq == lastseq[myMsg->src]){
             dbg(FLOODING_CHANNEL, "Duplicate packet, dropping.\n");
