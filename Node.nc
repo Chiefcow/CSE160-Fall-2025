@@ -59,9 +59,9 @@ implementation{
       if(len==sizeof(pack)){
          pack* myMsg=(pack*) payload;
          dbg(FLOODING_CHANNEL, "Flooding: recived seq=%d from src=%d destined for %d\n", myMsg->seq, myMsg->src, myMsg->dest); // Debug messaging 
-         //static uint16_t lastseq[256]; // per-source sequence memory 
+         //static uint16_t lastSeq[256]; // per-source sequence memory 
          //IF this method fails best try a hashmap never can go wrong with that - Elvis
-         if(myMsg->seq == lastseq[myMsg->src]){
+         if(myMsg->seq == lastSeq[myMsg->src]){
             dbg(FLOODING_CHANNEL, "Duplicate packet, dropping.\n");
             return msg; // This should be fowarded? - ELvis
          }
