@@ -25,6 +25,8 @@ module Node{
 
    //new interface
    uses interface NeighborDiscovery as NeighborDiscovery;
+
+   uses interface Flooding as Flooding;
    //uses interface NeighborDiscovery;
 }
 
@@ -37,8 +39,10 @@ implementation{
 
    event void Boot.booted(){
       call AMControl.start();
-      //starting the neighborDiscovery module on start
+      //starting the neighborDiscovery module
       call NeighborDiscovery.start();
+      //flooding start
+      call Flooding.start();
 
       dbg(GENERAL_CHANNEL, "Booted\n");
    }

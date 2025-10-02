@@ -84,11 +84,10 @@ implementation{
       return msg;
    }
 
-<<<<<<< Updated upstream
-    // components NeighborDiscoveryC;
-    // Node.NeighborDiscovery -> SimpleSendC;
-}
-=======
+
+    components FloodingC;
+    Node.Flooding -> FloodingC;
+
 
    event void CommandHandler.ping(uint16_t destination, uint8_t *payload){
       dbg(GENERAL_CHANNEL, "PING EVENT \n");
@@ -121,4 +120,3 @@ implementation{
       memcpy(Package->payload, payload, length);
    }
 }
->>>>>>> Stashed changes
