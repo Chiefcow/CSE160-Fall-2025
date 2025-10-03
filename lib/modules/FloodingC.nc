@@ -20,11 +20,13 @@ configuration FloodingC {
 
 implementation {
     components FloodingP;
-    Flooding = FloodingP;
+    components new SimpleSendC(AM_PACK);
     
+     Flooding = FloodingP;
+
+     FloodingP.Sender ->SimpleSendC;
     //components new SimpleSendP();
 
-    // components new SimpleSendC(AM_PACK);
     // NeighborDiscoveryP.Sender -> SimpleSendC;
     
 }

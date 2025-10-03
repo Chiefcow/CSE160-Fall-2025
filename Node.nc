@@ -10,7 +10,6 @@
 #include "includes/command.h"
 #include "includes/packet.h"
 #include "includes/CommandMsg.h"
-#include "includes/sendInfo.h"
 #include "includes/channels.h"
 
 module Node{
@@ -19,31 +18,27 @@ module Node{
    uses interface SplitControl as AMControl;
    uses interface Receive;
 
-   uses interface SimpleSend as Sender;
-
    uses interface CommandHandler;
 
    //new interface
    uses interface NeighborDiscovery as NeighborDiscovery;
+   //uses interface NeighborDiscovery;;
 
    uses interface Flooding as Flooding;
-   //uses interface NeighborDiscovery;
 }
 
 implementation{
    pack sendPackage;
-
+   static uint16_t seqNo = 0; //sequence  number for packets 
    // Prototypes
    void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length);
 
    event void Boot.booted(){
       call AMControl.start();
-      //starting the neighborDiscovery module
-      call NeighborDiscovery.start();
-      //flooding start
-      call Flooding.start();
+    call NeighborDiscovery.start();
+    call Flooding.start();   // start flooding module
 
-      dbg(GENERAL_CHANNEL, "Booted\n");
+    dbg(GENERAL_CHANNEL, "Booted\n");
    }
 
    event void AMControl.startDone(error_t err){
@@ -58,21 +53,19 @@ implementation{
    event void AMControl.stopDone(error_t err){}
 
    event message_t* Receive.receive(message_t* msg, void* payload, uint8_t len){
-      dbg(GENERAL_CHANNEL, "Packet Received\n");
-      if(len==sizeof(pack)){
-         pack* myMsg=(pack*) payload;
-         dbg(GENERAL_CHANNEL, "Package Payload: %s\n", myMsg->payload);
-         return msg;
-      }
-      dbg(GENERAL_CHANNEL, "Unknown Packet Type %d\n", len);
-      return msg;
+      if (len == sizeof(pack)) {
+        pack* myMsg = (pack*) payload;
+        dbg(GENERAL_CHANNEL, "Node %d recived packet ssrc=%d dest=%d seq=%d\n", TOS_NODE_ID, myMsg->src,myMsg->dest,myMsg->seq);
+        call Flooding.handle_flooding(myMsg);
+    }
+    return msg;
    }
 
 
    event void CommandHandler.ping(uint16_t destination, uint8_t *payload){
       dbg(GENERAL_CHANNEL, "PING EVENT \n");
-      makePack(&sendPackage, TOS_NODE_ID, destination, 0, 0, 0, payload, PACKET_MAX_PAYLOAD_SIZE);
-      call Sender.send(sendPackage, destination);
+      makePack(&sendPackage, TOS_NODE_ID, destination, 5 /* Time to live - Elvis*/, 0, seqNo++, payload, PACKET_MAX_PAYLOAD_SIZE);
+      call Flooding.handle_flooding(&sendPackage);
    }
 
    event void CommandHandler.printNeighbors(){}
