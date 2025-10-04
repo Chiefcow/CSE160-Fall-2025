@@ -1,42 +1,42 @@
-/**
- * ANDES Lab - University of California, Merced
- * This class provides the basic functions of a network node.
- *
- * @author UCM ANDES Lab
- * @date   2013/09/03
- *
- */
-
 #include <Timer.h>
 #include "includes/CommandMsg.h"
 #include "includes/packet.h"
 
-configuration NodeC{
-}
+configuration NodeC { }
 implementation {
     components MainC;
     components Node;
     components new AMReceiverC(AM_PACK) as GeneralReceive;
+    components ActiveMessageC;
+    components new SimpleSendC(AM_PACK);
+    components CommandHandlerC;
 
-    
+    // Flooding + Neighbor Discovery
+    components FloodingC;
+    components NeighborDiscoveryC;
 
+    // Boot & Receive
     Node -> MainC.Boot;
-
     Node.Receive -> GeneralReceive;
 
-    components ActiveMessageC;
+    // Radio
     Node.AMControl -> ActiveMessageC;
 
-    //look here
-    components CommandHandlerC;
+    // SimpleSend for Node
+    Node.Sender -> SimpleSendC;
+
+    // Commands
     Node.CommandHandler -> CommandHandlerC;
 
-    components NeighborDiscoveryC;
-    Node.NeighborDiscovery -> NeighborDiscoveryC;
-
-    components FloodingC;
+    // Flooding to Node
     Node.Flooding -> FloodingC;
 
-    // components NeighborDiscoveryC;
-    // Node.NeighborDiscovery -> SimpleSendC;
+    // Neighbor Discovery to Node
+    Node.NeighborDiscovery -> NeighborDiscoveryC;
+
+    // Cross wiring:
+    //  - Let Flooding notify NbD (events)
+    //  - Let NbD send its probes through Flooding (commands)
+    FloodingC.NeighborDiscovery   -> NeighborDiscoveryC;
+    NeighborDiscoveryC.Flooding   -> FloodingC;
 }

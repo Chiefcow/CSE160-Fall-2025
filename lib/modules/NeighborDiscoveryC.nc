@@ -1,31 +1,13 @@
-/**
- * ANDES Lab - University of California, Merced
- * This class provides the basic functions of a network node.
- *
- * @author UCM ANDES Lab
- * @date   2013/09/03
- *
- */
-
-#include <Timer.h>
-#include "../../includes/CommandMsg.h"
-#include "../../includes/packet.h"
-//#include "../../lib/interfaces/SimpleSend.nc"
-
 configuration NeighborDiscoveryC {
     provides interface NeighborDiscovery;
-    //provides interface SimpleSend;
-    //uses interface SimpleSend as Sender;
+    uses interface Flooding;     // NodeC will wire this to FloodingC
 }
-
 implementation {
     components NeighborDiscoveryP;
+    components new TimerMilliC();
+
     NeighborDiscovery = NeighborDiscoveryP;
 
-    //components new SimpleSendP();
-    // components new SimpleSendC(AM_PACK);
-    // NeighborDiscoveryP.Sender -> SimpleSendC;
-    
+    NeighborDiscoveryP.Timer0  -> TimerMilliC;
+    NeighborDiscoveryP.Flooding -> Flooding;   // receive Flooding.handle_flooding calls
 }
-
-

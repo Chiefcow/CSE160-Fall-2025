@@ -4,6 +4,7 @@
 
 #ifndef PROTOCOL_H
 #define PROTOCOL_H
+#define PROTOCOL_NBD  1   // Neighbor Discovery packet type
 
 //PROTOCOLS
 enum{
