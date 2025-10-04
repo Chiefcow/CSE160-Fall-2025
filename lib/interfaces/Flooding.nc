@@ -6,6 +6,3 @@ interface Flooding {
     command void _flood(uint8_t message, uint8_t receive);
     command void handle_flooding(pack* message);
 }
-
-
-

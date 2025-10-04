@@ -16,3 +16,9 @@ interface Hashmap<t>{
    command uint16_t size();
    command uint32_t * getKeys();
 }
+
+
+/*
+Will make use of the Hash Map to support Neighbor Module
+
+*/

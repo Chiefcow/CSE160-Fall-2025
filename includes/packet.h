@@ -6,7 +6,7 @@
 #define PACKET_H
 
 
-# include "protocol.h"
+#include "protocol.h"
 #include "channels.h"
 
 enum{
@@ -19,7 +19,7 @@ enum{
 typedef nx_struct pack{
 	nx_uint16_t dest;
 	nx_uint16_t src;
-	nx_uint16_t seq;		//Sequence Number
+	nx_uint16_t seq;		//Sequence Number --> Used to identify ambigous Nodes
 	nx_uint8_t TTL;		//Time to Live
 	nx_uint8_t protocol;
 	nx_uint8_t payload[PACKET_MAX_PAYLOAD_SIZE];
@@ -34,7 +34,7 @@ typedef nx_struct pack{
 void logPack(pack *input){
 	dbg(GENERAL_CHANNEL, "Src: %hhu Dest: %hhu Seq: %hhu TTL: %hhu Protocol:%hhu  Payload: %s\n",
 	input->src, input->dest, input->seq, input->TTL, input->protocol, input->payload);
-}
+} //For refernce, assume the input packet will always contain the same struct data as pack
 
 enum{
 	AM_PACK=6

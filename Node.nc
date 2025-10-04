@@ -14,35 +14,33 @@
 #include "includes/channels.h"
 
 module Node{
+   //Following components are built in modules of TinyOS
    uses interface Boot;
-
    uses interface SplitControl as AMControl;
    uses interface Receive;
 
+   //Given components via skeleton
    uses interface SimpleSend as Sender;
-
    uses interface CommandHandler;
 
-   //new interface
+   //Implemented components below:
    uses interface NeighborDiscovery as NeighborDiscovery;
-
    uses interface Flooding as Flooding;
-   //uses interface NeighborDiscovery;
 }
 
 implementation{
+   //Instantiating a packet which will be referenced as sendPkg
    pack sendPackage;
 
    // Prototypes
-   void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length);
+   void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length); //Reason for pointer to payload is because each node may communicate different data
 
    event void Boot.booted(){
       call AMControl.start();
-      //starting the neighborDiscovery module
+      //starting the neighborDiscovery
       call NeighborDiscovery.start();
       //flooding start
       call Flooding.start();
-
       dbg(GENERAL_CHANNEL, "Booted\n");
    }
 
@@ -56,10 +54,11 @@ implementation{
    }
 
    event void AMControl.stopDone(error_t err){}
-
+   //Handler for recieved packets
    event message_t* Receive.receive(message_t* msg, void* payload, uint8_t len){
       dbg(GENERAL_CHANNEL, "Packet Received\n");
       if(len==sizeof(pack)){
+         //Here we reference the pack struct and unload the payload contents as "myMsg"
          pack* myMsg=(pack*) payload;
          dbg(GENERAL_CHANNEL, "Package Payload: %s\n", myMsg->payload);
          return msg;

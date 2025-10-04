@@ -30,16 +30,13 @@ implementation {
     components new SimpleSendC(AM_PACK);
     Node.Sender -> SimpleSendC;
 
-    //look here
     components CommandHandlerC;
     Node.CommandHandler -> CommandHandlerC;
 
+    //Implemented components wired to Node below
     components NeighborDiscoveryC;
     Node.NeighborDiscovery -> NeighborDiscoveryC;
 
     components FloodingC;
     Node.Flooding -> FloodingC;
-
-    // components NeighborDiscoveryC;
-    // Node.NeighborDiscovery -> SimpleSendC;
 }
