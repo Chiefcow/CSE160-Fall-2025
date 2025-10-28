@@ -14,17 +14,27 @@
 
 configuration NeighborDiscoveryC {
     provides interface NeighborDiscovery;
-    //provides interface SimpleSend;
-    //uses interface SimpleSend as Sender;
 }
 
 implementation {
     components NeighborDiscoveryP;
+    components new SimpleSendC(AM_PACK);
+    components new TimerMilliC() as NeighborTimerC;
+    components new HashmapC(uint32_t, 20) as NeighborMapC;
+    components new ListC(uint16_t, 20) as NeighborListC;
+    
     NeighborDiscovery = NeighborDiscoveryP;
+    
+    NeighborDiscoveryP.Sender -> SimpleSendC;
+    NeighborDiscoveryP.NeighborTimer -> NeighborTimerC;
+    NeighborDiscoveryP.NeighborMap -> NeighborMapC;
+    NeighborDiscoveryP.NeighborList -> NeighborListC;
+    // components NeighborDiscoveryP;
+    // NeighborDiscovery = NeighborDiscoveryP;
 
-    //components new SimpleSendP();
-    // components new SimpleSendC(AM_PACK);
-    // NeighborDiscoveryP.Sender -> SimpleSendC;
+    // //components new SimpleSendP();
+    // // components new SimpleSendC(AM_PACK);
+    // // NeighborDiscoveryP.Sender -> SimpleSendC;
     
 }
 

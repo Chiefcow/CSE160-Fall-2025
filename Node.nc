@@ -55,10 +55,25 @@ implementation{
    event message_t* Receive.receive(message_t* msg, void* payload, uint8_t len){
       if (len == sizeof(pack)) {
         pack* myMsg = (pack*) payload;
-        dbg(GENERAL_CHANNEL, "Node %d recived packet ssrc=%d dest=%d seq=%d\n", TOS_NODE_ID, myMsg->src,myMsg->dest,myMsg->seq);
+        
+        // Handle neighbor discovery packets
+        if (myMsg->protocol == PROTOCOL_NEIGHBOR_DISCOVERY) {
+            call NeighborDiscovery.handleNeighbor(myMsg);
+            return msg;
+        }
+        
+        // Handle regular packets with flooding
+        dbg(GENERAL_CHANNEL, "Node %d received packet src=%d dest=%d seq=%d\n", 
+            TOS_NODE_ID, myMsg->src, myMsg->dest, myMsg->seq);
         call Flooding.handle_flooding(myMsg);
     }
     return msg;
+   //    if (len == sizeof(pack)) {
+   //      pack* myMsg = (pack*) payload;
+   //      dbg(GENERAL_CHANNEL, "Node %d recived packet ssrc=%d dest=%d seq=%d\n", TOS_NODE_ID, myMsg->src,myMsg->dest,myMsg->seq);
+   //      call Flooding.handle_flooding(myMsg);
+   //  }
+   //  return msg;
    }
 
 
@@ -68,7 +83,9 @@ implementation{
       call Flooding.handle_flooding(&sendPackage);
    }
 
-   event void CommandHandler.printNeighbors(){}
+   event void CommandHandler.printNeighbors(){
+      call NeighborDiscovery.printNeighbors();
+   }
 
    event void CommandHandler.printRouteTable(){}
 
