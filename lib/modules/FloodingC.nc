@@ -22,9 +22,9 @@ implementation {
     components FloodingP;
     components new SimpleSendC(AM_PACK);
     
-     Flooding = FloodingP;
+    Flooding = FloodingP;
 
-     FloodingP.Sender ->SimpleSendC;
+    FloodingP.Sender ->SimpleSendC;
     //components new SimpleSendP();
 
     // NeighborDiscoveryP.Sender -> SimpleSendC;
