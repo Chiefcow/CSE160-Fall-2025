@@ -17,10 +17,11 @@ def main():
     s.bootAll();
 
     # Add the main channels. These channels are declared in includes/channels.h
-    s.addChannel(s.COMMAND_CHANNEL);
-    s.addChannel(s.GENERAL_CHANNEL);
-    s.addChannel(s.FLOODING_CHANNEL);
+    # s.addChannel(s.COMMAND_CHANNEL);
+    # s.addChannel(s.GENERAL_CHANNEL);
+    # s.addChannel(s.FLOODING_CHANNEL);
     #s.addChannel(s.NEIGHBOR_CHANNEL);
+    s.addChannel(s.ROUTING_CHANNEL)
 
     # After sending a ping, simulate a little to prevent collision.
     #s.runTime(1);
@@ -28,14 +29,22 @@ def main():
     # s.runTime(1);
     s.runTime(1);
 
-    s.ping(1, 10, "Hi!");
-    s.runTime(1);
-
-    s.runTime(5)
-
-    s.ping(1, 5, "Hello seq 1")
+    # for i in range(1, 10):
+    #     s.routeDMP(i)
+    #     s.runTime(1)
+    
+    # Test routing with ping
+    s.ping(1, 9, "Testing routing")
     s.runTime(10)
-    # Print neighbors for each node
+
+    # s.ping(1, 10, "Hi!");
+    # s.runTime(1);
+
+    # s.runTime(5)
+
+    # s.ping(1, 5, "Hello seq 1")
+    # s.runTime(10)
+    # # Print neighbors for each node
     # for i in range(1, 2):
     #     s.neighborDMP(i)
     #     s.runTime(1)

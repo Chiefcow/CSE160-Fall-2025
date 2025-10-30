@@ -37,6 +37,12 @@ implementation {
     components FloodingC;
     Node.Flooding -> FloodingC;
 
+    components LinkStateC;
+    Node.LinkState -> LinkStateC;
+
+    // Add SimpleSend for Node to send packets
+    components new SimpleSendC(AM_PACK);
+    Node.Sender -> SimpleSendC;
     // components NeighborDiscoveryC;
     // Node.NeighborDiscovery -> SimpleSendC;
 }
