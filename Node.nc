@@ -62,6 +62,7 @@ implementation{
             return msg;
         }
         
+      //   ++seqNo;
         // Handle regular packets with flooding
         dbg(GENERAL_CHANNEL, "Node %d received packet src=%d dest=%d seq=%d\n", 
             TOS_NODE_ID, myMsg->src, myMsg->dest, myMsg->seq);
