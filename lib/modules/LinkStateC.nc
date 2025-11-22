@@ -6,10 +6,12 @@ configuration LinkStateC {
     provides interface LinkState;
 }
 
-implementation {  // Fixed typo: was "implmentation"
+implementation {  
     components LinkStateP;
     components new SimpleSendC(AM_PACK);
     components new TimerMilliC() as LSPTimerC;
+
+    //Look here
     components new HashmapC(linkstate_packet, 20) as LSPCacheC;
     components new HashmapC(routing_entry, 20) as RoutingTableC;
     components new ListC(uint16_t, 20) as UnvisitedC;
@@ -19,6 +21,7 @@ implementation {  // Fixed typo: was "implmentation"
     
     LinkState = LinkStateP;
     
+    //wiring
     LinkStateP.Sender -> SimpleSendC;
     LinkStateP.LSPTimer -> LSPTimerC;
     LinkStateP.LSPCache -> LSPCacheC;

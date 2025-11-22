@@ -43,21 +43,24 @@ implementation {
     // Create and broadcast Link State Packet
     void broadcastLSP() {
         pack lsp_packet;
+        //
         linkstate_packet lsp_data;
+        // Contents defined in our header file of which we would make use of
         uint16_t* neighbors;
         uint16_t neighbor_count;
+
         uint16_t i;
         
         // Get current neighbors
         neighbors = call NeighborDiscovery.getNeighbors();
         neighbor_count = call NeighborDiscovery.getNeighborListSize();
         
-        // Build LSP data
+        // Use the information provided by neighbor discovery for our lsp packet
         lsp_data.node_id = TOS_NODE_ID;
         lsp_data.seq_num = ++lsp_sequence;
         lsp_data.neighbor_count = neighbor_count;
         
-        // Copy neighbors
+        // Copy neighbors provided by Neighbor discovery into our list provided by the header struct
         for (i = 0; i < neighbor_count && i < MAX_NEIGHBORS; i++) {
             lsp_data.neighbors[i] = neighbors[i];
         }
@@ -68,19 +71,20 @@ implementation {
         lsp_packet.TTL = MAX_TTL;
         lsp_packet.seq = lsp_data.seq_num;
         lsp_packet.protocol = PROTOCOL_LINKEDLIST;
+        //Copying the contents of the packet
         memcpy(lsp_packet.payload, &lsp_data, sizeof(linkstate_packet));
         
         dbg(ROUTING_CHANNEL, "Node %d: Broadcasting LSP with %d neighbors\n", 
             TOS_NODE_ID, neighbor_count);
         
-        // Store own LSP
+        // Start inserting items into our hash | Store own LSP
         call LSPCache.insert(TOS_NODE_ID, lsp_data);
         
-        // Flood the LSP
+        // Use flooding to distribute the Link state packet 
         call Flooding.handle_flooding(&lsp_packet);
     }
     
-    // Handle incoming LSP
+    // Handle incoming LSP | updates tables
     command void LinkState.handleLSP(pack* message) {
         linkstate_packet* lsp_data;
         linkstate_packet cached_lsp;
@@ -112,7 +116,7 @@ implementation {
         // Recalculate routing table
         calculateRoutingTable();
         
-        // Continue flooding
+        // Use flooding to dirstribute the LSP packet
         call Flooding.handle_flooding(message);
     }
     
@@ -126,31 +130,38 @@ implementation {
         linkstate_packet current_lsp;
         routing_entry route;
         
-        dbg(ROUTING_CHANNEL, "Node %d: Calculating routing table\n", TOS_NODE_ID);
+        dbg(ROUTING_CHANNEL, "Node %d: ==================Calculating routing table=================\n", TOS_NODE_ID);
         
-        // Initialize distances - Fixed: use MAX_COST instead of INFINITY
+        // initialize our distances and previous node with i - Max_Nodes ; which is 20-> Max nodes in network
         for (i = 0; i < MAX_NODES; i++) {
             distance[i] = MAX_COST;
             previous[i] = MAX_COST;
+            //Currently set everything to false as nothing as been visted yet
             visited[i] = FALSE;
         }
         
-        // Distance to self is 0
+        // cost or distances from init node is 0
         distance[TOS_NODE_ID] = 0;
-        previous[TOS_NODE_ID] = TOS_NODE_ID;
+        //Previous node
+        previous[TOS_NODE_ID] = TOS_NODE_ID;  
         
-        // Get all nodes we know about
+        // Get all nodes we know about --> LSPCache refers to a hash with neigbors popullated by our neighbor discovery module
         lsp_keys = call LSPCache.getKeys();
+
+        // Defined eariler as 16bit unsigned int; set its value to the size our current neigbor list size; means how many neighbors we have
         lsp_count = call LSPCache.size();
         
         // Run Dijkstra's algorithm
         for (i = 0; i < lsp_count; i++) {
-            // Find unvisited node with minimum distance
+            // place holder variables set to Max_Cost --> Being 20, which represents 20 hops
             min_distance = MAX_COST;
             min_node = MAX_COST;
             
+            // Loop to go through nodes and thier given cost
             for (j = 0; j < lsp_count; j++) {
+                // Set u equal to a particular index of our hashed neibor map; continue updwards until we hit the size of the neighbor list
                 u = lsp_keys[j];
+                // Updated if the node hase been vistied with a better cost
                 if (!visited[u] && distance[u] < min_distance) {
                     min_distance = distance[u];
                     min_node = u;
@@ -160,6 +171,7 @@ implementation {
             if (min_node == MAX_COST) break;
             
             u = min_node;
+            // Set u to True as we have just completed the logic to vist
             visited[u] = TRUE;
             
             // Get LSP for this node
@@ -200,7 +212,7 @@ implementation {
                 dbg(ROUTING_CHANNEL, "Node %d: Route to %d via %d (cost %d)\n", 
                     TOS_NODE_ID, u, v, distance[u]);
             }
-        }
+        } //end of dijstra
     }
     
     // Get next hop for destination

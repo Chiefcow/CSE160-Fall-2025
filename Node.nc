@@ -12,6 +12,7 @@
 #include "includes/CommandMsg.h"
 #include "includes/channels.h"
 #include "includes/linkstate.h"
+#include "includes/socket.h"
 
 module Node{
    uses interface Boot;
@@ -26,11 +27,18 @@ module Node{
    uses interface Flooding as Flooding;
    uses interface LinkState as LinkState;
    uses interface SimpleSend as Sender;  // Add this for sending packets
+   uses interface Transport;
+   uses interface Timer<TMilli> as TestTimer;
 }
 
 implementation{
    pack sendPackage;
    static uint16_t seqNo = 0; //sequence  number for packets 
+
+   //proj 3
+   socket_t mySocket = NULL;
+   bool isServer = FALSE;
+
    // Prototypes
    void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length);
 
@@ -56,12 +64,19 @@ implementation{
    event message_t* Receive.receive(message_t* msg, void* payload, uint8_t len){
       if (len == sizeof(pack)) {
         pack* myMsg = (pack*) payload;
-        
+
         // Handle neighbor discovery packets
         if (myMsg->protocol == PROTOCOL_NEIGHBOR_DISCOVERY) {
             call NeighborDiscovery.handleNeighbor(myMsg);
             return msg;
         }
+
+         //proj 3
+        if (myMsg->protocol == PROTOCOL_TCP) {
+            call Transport.receive(myMsg);
+            return msg;
+         }
+
         // Handle link state packets
          if (myMsg->protocol == PROTOCOL_LINKEDLIST) {
             call LinkState.handleLSP(myMsg);
@@ -117,9 +132,65 @@ implementation{
 
    event void CommandHandler.printDistanceVector(){}
 
-   event void CommandHandler.setTestServer(){}
+   event void CommandHandler.setTestServer(uint8_t port){
+      socket_addr_t addr;
+      
+      mySocket = call Transport.socket();
+      if (mySocket == NULL) return;
+      
+      addr.port = port;
+      addr.addr = TOS_NODE_ID;
+      
+      call Transport.bind(mySocket, &addr);
+      call Transport.listen(mySocket);
+      
+      isServer = TRUE;
+      dbg(TRANSPORT_CHANNEL, "Node %d: Server listening on port %d\n", 
+         TOS_NODE_ID, port);
+      }
+   // event void CommandHandler.setTestServer(){}
 
-   event void CommandHandler.setTestClient(){}
+   // event void CommandHandler.setTestClient(){}
+   event void CommandHandler.setTestClient(uint16_t dest, uint8_t srcPort, uint8_t destPort, uint16_t transfer){
+      socket_addr_t local, remote;
+      
+      mySocket = call Transport.socket();
+      if (mySocket == NULL) return;
+      
+      local.port = srcPort;
+      local.addr = TOS_NODE_ID;
+      call Transport.bind(mySocket, &local);
+      
+      remote.port = destPort;
+      remote.addr = dest;
+      call Transport.connect(mySocket, &remote);
+      
+      isServer = FALSE;
+      dbg(TRANSPORT_CHANNEL, "Node %d: Client connecting to %d:%d\n", 
+         TOS_NODE_ID, dest, destPort);
+      
+      // Send data after 3 seconds
+      call TestTimer.startOneShot(3000);
+      }
+
+   event void CommandHandler.clientClose(uint16_t dest, uint8_t srcPort, uint8_t destPort){
+      if (mySocket != NULL) {
+         call Transport.close(mySocket);
+         mySocket = NULL;
+      }
+   }
+
+   event void TestTimer.fired(){
+      uint8_t testData[10];
+      uint8_t i;
+      
+      if (!isServer && mySocket != NULL) {
+         for (i = 0; i < 10; i++) {
+               testData[i] = i;
+         }
+         call Transport.write(mySocket, testData, 10);
+      }
+   }
 
    event void CommandHandler.setAppServer(){}
 
