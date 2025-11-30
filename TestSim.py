@@ -14,6 +14,10 @@ class TestSim:
     CMD_NEIGHBOR_DUMP = 1
     CMD_ROUTE_DUMP=3
 
+    #project 3 
+    CMD_TEST_CLIENT = 4
+    CMD_TEST_SERVER = 5
+
     # CHANNELS - see includes/channels.h
     COMMAND_CHANNEL="command";
     GENERAL_CHANNEL="general";
@@ -62,6 +66,22 @@ class TestSim:
     def cmdClientClose(self, address, dest, srcPort, destPort):
          # Similar payload construction
          pass
+    # Wrapper for the Server test
+    # Usage: s.testServer(node_id, port=80)
+    def testServer(self, address, port=80):
+        print "Node " + str(address) + " acting as server on port " + str(port)
+        self.cmdTestServer(address, port)
+
+    # Wrapper for the Client test
+    # Usage: s.testClient(client_id, dest_id=1, src_port=90, dest_port=80, transfer=100)
+    # Added dest=1 default to support legacy calls like s.testClient(4)
+    def testClient(self, address, dest=1, srcPort=90, destPort=80, transfer=100):
+        print "Node " + str(address) + " connecting to Node " + str(dest) + \
+              " : " + str(destPort) + " transferring " + str(transfer)
+        # Arguments: (ClientNodeID, DestNodeID, SrcPort, DestPort, TransferAmount)
+        self.cmdTestClient(address, dest, srcPort, destPort, transfer)
+    
+    
 
     # In main():
     # s.cmdTestServer(1, 80)
