@@ -42,6 +42,31 @@ class TestSim:
         self.msg = CommandMsg()
         self.pkt = self.t.newPacket()
         self.pkt.setType(self.msg.get_amType())
+    
+    def cmdTestServer(self, address, port):
+        # Create Payload
+        # We need to serialize this to match how CommandHandler parses it
+        # Assuming payload format: [port]
+        self.sendCMD(self.CMD_TEST_SERVER, address, chr(port))
+
+    def cmdTestClient(self, address, dest, srcPort, destPort, transfer):
+        # Payload: dest(2 bytes), srcPort(1), destPort(1), transfer(2 bytes)
+        payload = ""
+        payload += chr(dest & 0xFF) + chr((dest >> 8) & 0xFF)
+        payload += chr(srcPort)
+        payload += chr(destPort)
+        payload += chr(transfer & 0xFF) + chr((transfer >> 8) & 0xFF)
+        
+        self.sendCMD(self.CMD_TEST_CLIENT, address, payload)
+
+    def cmdClientClose(self, address, dest, srcPort, destPort):
+         # Similar payload construction
+         pass
+
+    # In main():
+    # s.cmdTestServer(1, 80)
+    # s.runTime(10)
+    # s.cmdTestClient(2, 1, 90, 80, 100)
 
     # Load a topo file and use it.
     def loadTopo(self, topoFile):

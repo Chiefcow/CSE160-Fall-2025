@@ -45,4 +45,8 @@ implementation {
     Node.Sender -> SimpleSendC;
     // components NeighborDiscoveryC;
     // Node.NeighborDiscovery -> SimpleSendC;
+
+    //Add TransportC
+    components TransportC;
+    Node.Transport -> TransportC;
 }

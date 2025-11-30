@@ -18,10 +18,10 @@ def main():
 
     # Add the main channels. These channels are declared in includes/channels.h
     # s.addChannel(s.COMMAND_CHANNEL);
-    s.addChannel(s.GENERAL_CHANNEL);
+    #s.addChannel(s.GENERAL_CHANNEL);
     # s.addChannel(s.FLOODING_CHANNEL);
     #s.addChannel(s.NEIGHBOR_CHANNEL);
-    #s.addChannel(s.ROUTING_CHANNEL)
+    s.addChannel(s.ROUTING_CHANNEL)
 
     # After sending a ping, simulate a little to prevent collision.
     #s.runTime(1);
@@ -34,11 +34,14 @@ def main():
     #     s.runTime(1)
     
     # Test routing with ping
-    s.ping(1, 5, "Testing routing")
-    s.runTime(10)
-
-    s.ping(5, 1, "Routing ping back")
-    s.runTime(10)
+    s.routeDMP(4)
+    s.ping(16,4, "test1")
+    print('Done*************************************')
+    s.moteOff(9)
+    print('start Test 2 ********************************')
+    s.ping(5,10, "test2")
+    print('Done ping test2')
+    s.routeDMP(7)
 
     # s.ping(1, 10, "Hi!");
     # s.runTime(1);
