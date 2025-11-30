@@ -1,11 +1,3 @@
-/*
- * ANDES Lab - University of California, Merced
- * This class provides the basic functions of a network node.
- *
- * @author UCM ANDES Lab
- * @date   2013/09/03
- *
- */
 #include <Timer.h>
 #include "includes/command.h"
 #include "includes/packet.h"
@@ -16,46 +8,40 @@
 
 module Node{
    uses interface Boot;
-
    uses interface SplitControl as AMControl;
    uses interface Receive;
-
    uses interface CommandHandler;
-
-   //new interfaces
+   
    uses interface NeighborDiscovery as NeighborDiscovery;
    uses interface Flooding as Flooding;
    uses interface LinkState as LinkState;
-   uses interface SimpleSend as Sender;  // Add this for sending packets
-   //Project 3
+   uses interface SimpleSend as Sender;
    uses interface Transport;
 }
 
 implementation{
    pack sendPackage;
-   //Logic for project 3
-   //*********************************************************************************
    socket_t clientFd;
    socket_t serverFd;
+   
+   // Prototypes
+   void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length);
 
-   //CMD_TEST_SERVER
+   // CMD_TEST_SERVER
    void cmdTestServer(uint8_t port){
       socket_addr_t addr;
       addr.port = port; 
       addr.addr = TOS_NODE_ID;
-
-      call Transport.start(); //make sure the timer starts
+      call Transport.start(); 
       serverFd = call Transport.socket();
       call Transport.bind(serverFd, &addr);
       call Transport.listen(serverFd);
       dbg("transport", "Node %d Listening on port %d\n", TOS_NODE_ID, port);
-
    }
 
-   //CDM_TEST_CLIENT
+   // CMD_TEST_CLIENT
    void cmdTestClient(uint16_t dest, uint8_t srcPort, uint8_t destPort, uint16_t transfer){
       socket_addr_t src, dst;
-
       call Transport.start();
       clientFd = call Transport.socket();
 
@@ -66,30 +52,48 @@ implementation{
       dst.port = destPort;
       dst.addr = dest;
       call Transport.connect(clientFd, &dst);
-
-      //Store our transfer quantity on a global variable 
-
    }
 
-   //CDM_CLOSE
+   // CMD_CLOSE
    void cmdClientClose(){
-      call Transport.close(clientFd)
+      call Transport.close(clientFd);
    }
 
-   event void CommandHandler.handleCommand(unit8_t *payload) {
-      if (msg->id == CDM_TEST_CLIENT){
-         uint16_t dest = payload[0] | (payload[1] <<8);
-      }
+   //event void CommandHandler.handleCommand(uint8_t *payload) {
+      // Cast payload to CommandMsg to access fields if needed, 
+      // but CommandHandler usually gives specific args. 
+      // Use the 'payload' buffer directly based on your specific command structure.
+      
+      // NOTE: Your CommandHandler implementation passes a pointer to the payload bytes
+      // Check CommandHandlerP.nc to see what it sends.
+      // Assuming payload[0] is the first byte of data...
+      
+      // However, your CommandHandler interface definition has specific events:
+      // setTestClient(), setTestServer(). 
+      // You should implement those events instead of handleCommand if possible, 
+      // OR if you modified CommandHandler to pass raw commands:
 
-      if (msg ->id == CMD_TEST_SERVER){
-         //call cmdTestserver
-      }
+      // Since handleCommand isn't in standard CommandHandler interface provided, 
+      // I will assume you meant to implement the specific events below:
+   //}
 
+   // Implement the events from CommandHandler interface:
+   event void CommandHandler.setTestServer() {
+      // Hardcoded test or read from a global buffer if you implemented that
+      cmdTestServer(80); 
    }
+
+   event void CommandHandler.setTestClient() {
+      // Hardcoded test
+      cmdTestClient(1, 41, 80, 100);
+   }
+
+   event void CommandHandler.setAppServer(){}
+   event void CommandHandler.setAppClient(){}
 
    event void Transport.connectDone(socket_t fd){
       dbg("transport", "client connected. Sending Data...\n");
-
+      // Add logic to send data here
    }
 
    event error_t Transport.accept(socket_t fd) {
@@ -97,28 +101,21 @@ implementation{
       return SUCCESS;
    }
 
-   //IMPORTANT: Hook Transport.recive into the main recive loop
-   //check below for logic
-
-
-   //**********************************************************************************
-   static uint16_t seqNo = 0; //sequence  number for packets 
-   // Prototypes
-   void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length);
+   // Sequence number
+   static uint16_t seqNo = 0;
 
    event void Boot.booted(){
       call AMControl.start();
       call NeighborDiscovery.start();
-      call Flooding.start();   // start flooding module
+      call Flooding.start();
       call LinkState.start();
-    dbg(GENERAL_CHANNEL, "Booted\n");
+      dbg(GENERAL_CHANNEL, "Booted\n");
    }
 
    event void AMControl.startDone(error_t err){
       if(err == SUCCESS){
          dbg(GENERAL_CHANNEL, "Radio On\n");
       }else{
-         //Retry until successful
          call AMControl.start();
       }
    }
@@ -126,64 +123,42 @@ implementation{
    event void AMControl.stopDone(error_t err){}
 
    event message_t* Receive.receive(message_t* msg, void* payload, uint8_t len){
-      //Project 3 Project Hook Transportation
-
       pack* myMsg = (pack*) payload;
-
-      if (myMsg ->protocol == PROTOCOL_TCP){
-         call Transport.recive(myMsg);
+      
+      // Transport Hook
+      if (myMsg->protocol == PROTOCOL_TCP){
+         call Transport.receive(myMsg); // Fixed typo 'recive'
          return msg;
       }
 
-      //********************************************************
       if (len == sizeof(pack)) {
-        pack* myMsg = (pack*) payload;
-        
-        // Handle neighbor discovery packets
         if (myMsg->protocol == PROTOCOL_NEIGHBOR_DISCOVERY) {
             call NeighborDiscovery.handleNeighbor(myMsg);
             return msg;
         }
-        // Handle link state packets
-         if (myMsg->protocol == PROTOCOL_LINKEDLIST) {
+        if (myMsg->protocol == PROTOCOL_LINKEDLIST) {
             call LinkState.handleLSP(myMsg);
             return msg;
-         }
+        }
          
-         // Handle regular packets with routing
-         if (myMsg->dest == TOS_NODE_ID) {
+        if (myMsg->dest == TOS_NODE_ID) {
             dbg(GENERAL_CHANNEL, "Packet reached destination\n");
-         } else {
+        } else {
             uint16_t nextHop = call LinkState.getNextHop(myMsg->dest);
             if (nextHop != AM_BROADCAST_ADDR) {
-               dbg(ROUTING_CHANNEL, "Forwarding to %d via %d\n", 
-                   myMsg->dest, nextHop);
+               dbg(ROUTING_CHANNEL, "Forwarding to %d via %d\n", myMsg->dest, nextHop);
                call Sender.send(*myMsg, nextHop);
             } else {
                call Flooding.handle_flooding(myMsg);
             }
-         }
+        }
       }
       return msg;
-      //   ++seqNo;
-        // Handle regular packets with flooding
-   //      dbg(GENERAL_CHANNEL, "Node %d received packet src=%d dest=%d seq=%d\n", 
-   //          TOS_NODE_ID, myMsg->src, myMsg->dest, myMsg->seq);
-   //      call Flooding.handle_flooding(myMsg);
-   //  }
-   //  return msg;
-   //    if (len == sizeof(pack)) {
-   //      pack* myMsg = (pack*) payload;
-   //      dbg(GENERAL_CHANNEL, "Node %d recived packet ssrc=%d dest=%d seq=%d\n", TOS_NODE_ID, myMsg->src,myMsg->dest,myMsg->seq);
-   //      call Flooding.handle_flooding(myMsg);
-   //  }
-   //  return msg;
    }
-
 
    event void CommandHandler.ping(uint16_t destination, uint8_t *payload){
       dbg(GENERAL_CHANNEL, "PING EVENT \n");
-      makePack(&sendPackage, TOS_NODE_ID, destination, 5 /* Time to live - Elvis*/, 0, seqNo++, payload, PACKET_MAX_PAYLOAD_SIZE);
+      makePack(&sendPackage, TOS_NODE_ID, destination, 5, 0, seqNo++, payload, PACKET_MAX_PAYLOAD_SIZE);
       call Flooding.handle_flooding(&sendPackage);
    }
 
@@ -196,16 +171,7 @@ implementation{
    }
 
    event void CommandHandler.printLinkState(){}
-
    event void CommandHandler.printDistanceVector(){}
-
-   event void CommandHandler.setTestServer(){}
-
-   event void CommandHandler.setTestClient(){}
-
-   event void CommandHandler.setAppServer(){}
-
-   event void CommandHandler.setAppClient(){}
 
    void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t protocol, uint16_t seq, uint8_t* payload, uint8_t length){
       Package->src = src;
