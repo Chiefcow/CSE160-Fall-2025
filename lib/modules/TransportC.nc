@@ -10,9 +10,13 @@ implementation {
     components RandomC;
     components new TimerMilliC() as TransportTimer;
 
+    components LinkStateC;
+
     Transport = TransportP;
     
     TransportP.Sender -> SimpleSendC;
     TransportP.Random -> RandomC;
     TransportP.TransportTimer -> TransportTimer;
+
+    TransportP.LinkState -> LinkStateC;
 }

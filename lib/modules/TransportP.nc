@@ -5,6 +5,7 @@
 
 module TransportP {
     provides interface Transport;
+    uses interface LinkState;
     uses interface SimpleSend as Sender;
     uses interface Random;
     uses interface Timer<TMilli> as TransportTimer;
@@ -75,6 +76,17 @@ implementation {
         return SUCCESS;
     }
 
+    void routeAndSend(pack packet, uint16_t dest) {
+        uint16_t nextHop = call LinkState.getNextHop(dest);
+        if (nextHop == AM_BROADCAST_ADDR) {
+            // If routing fails, we can't send unicast. 
+            // In a real TCP, we might drop, but here we can try broadcasting/flooding 
+            // or just drop. For robustness in this project, use broadcast:
+            nextHop = AM_BROADCAST_ADDR;
+        }
+        call Sender.send(packet, nextHop);
+    }
+
     command error_t Transport.connect(socket_t fd, socket_addr_t * addr) {
         pack packet;
         tcp_pack* tcp;
@@ -99,7 +111,7 @@ implementation {
         packet.seq = 0; 
         
         dbg("transport", "Sending SYN to %d port %d\n", sockets[fd].dest.addr, sockets[fd].dest.port);
-        call Sender.send(packet, sockets[fd].dest.addr);
+        routeAndSend(packet, sockets[fd].dest.addr);
         return SUCCESS;
     }
 
@@ -137,7 +149,7 @@ implementation {
             packet.TTL = MAX_TTL;
             
             dbg("transport", "Sending DATA Seq: %d Len: %d\n", seqToSend, tcp->payloadLen);
-            call Sender.send(packet, sockets[fd].dest.addr);
+            routeAndSend(packet, sockets[fd].dest.addr);
         }
     }
 
@@ -179,7 +191,7 @@ implementation {
         packet.protocol = PROTOCOL_TCP;
         packet.TTL = MAX_TTL;
 
-        call Sender.send(packet, sockets[fd].dest.addr);
+        routeAndSend(packet, sockets[fd].dest.addr);
         return SUCCESS;
     }
 
@@ -218,7 +230,7 @@ implementation {
                 reply.TTL = MAX_TTL;
 
                 dbg("transport", "Received SYN, sending SYN+ACK\n");
-                call Sender.send(reply, reply.dest);
+                routeAndSend(reply, reply.dest);
             }
             return SUCCESS;
         }
