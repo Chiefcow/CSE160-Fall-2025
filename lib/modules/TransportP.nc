@@ -274,17 +274,20 @@ implementation {
                 if (tcp->flags == TCP_DATA) {
                     if (tcp->seq == sockets[fd].nextExpected) {
                         dbg("transport", "Data Received Seq: %d Len: %d\n", tcp->seq, tcp->payloadLen);
+                        
                         for(i=0; i<tcp->payloadLen; i++) {
                             uint16_t idx = (sockets[fd].lastRcvd + 1) % SOCKET_BUFFER_SIZE;
                             sockets[fd].rcvdBuff[idx] = tcp->payload[i];
                             sockets[fd].lastRcvd++;
                         }
+                        
                         sockets[fd].nextExpected = tcp->seq + tcp->payloadLen;
 
                         dbg("transport", "Reading Data: ");
                         for(i=0; i<tcp->payloadLen; i++) {
-                            // Print logic
+                            dbg_clear("transport", "%d", tcp->payload[i]);
                         }
+                        dbg_clear("transport", "\n");
                     }
 
                     replyTcp = (tcp_pack*)reply.payload;

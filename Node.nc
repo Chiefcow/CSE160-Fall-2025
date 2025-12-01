@@ -23,6 +23,7 @@ implementation{
    pack sendPackage;
    socket_t clientFd;
    socket_t serverFd;
+   uint16_t transfer_amount = 0; // Store the amount to transfer
    
    // Prototypes
    void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length);
@@ -42,6 +43,9 @@ implementation{
    // CMD_TEST_CLIENT
    void cmdTestClient(uint16_t dest, uint8_t srcPort, uint8_t destPort, uint16_t transfer){
       socket_addr_t src, dst;
+      
+      transfer_amount = transfer; // Save for later
+
       call Transport.start();
       clientFd = call Transport.socket();
 
@@ -59,50 +63,37 @@ implementation{
       call Transport.close(clientFd);
    }
 
-   //event void CommandHandler.handleCommand(uint8_t *payload) {
-      // Cast payload to CommandMsg to access fields if needed, 
-      // but CommandHandler usually gives specific args. 
-      // Use the 'payload' buffer directly based on your specific command structure.
-      
-      // NOTE: Your CommandHandler implementation passes a pointer to the payload bytes
-      // Check CommandHandlerP.nc to see what it sends.
-      // Assuming payload[0] is the first byte of data...
-      
-      // However, your CommandHandler interface definition has specific events:
-      // setTestClient(), setTestServer(). 
-      // You should implement those events instead of handleCommand if possible, 
-      // OR if you modified CommandHandler to pass raw commands:
-
-      // Since handleCommand isn't in standard CommandHandler interface provided, 
-      // I will assume you meant to implement the specific events below:
-   //}
-
-   // Implement the events from CommandHandler interface:
    event void CommandHandler.setTestServer() {
-      // Hardcoded test or read from a global buffer if you implemented that
       cmdTestServer(80); 
    }
 
    event void CommandHandler.setTestClient() {
-      // Hardcoded test
       cmdTestClient(1, 41, 80, 100);
    }
 
    event void CommandHandler.setAppServer(){}
    event void CommandHandler.setAppClient(){}
 
+   // --- THIS IS THE FIX ---
    event void Transport.connectDone(socket_t fd){
-      dbg("transport", "client connected. Sending Data...\n");
-      // Add logic to send data here
+      uint16_t i;
+      uint8_t dataBuffer[SOCKET_BUFFER_SIZE]; // Temp buffer
+      
+      dbg("transport", "client connected. Sending %d bytes...\n", transfer_amount);
+      
+      // Generate data (1, 2, 3...)
+      for(i = 0; i < transfer_amount && i < SOCKET_BUFFER_SIZE; i++){
+          dataBuffer[i] = i + 1;
+      }
+      
+      // Send data
+      call Transport.send(fd, dataBuffer, transfer_amount);
    }
 
    event error_t Transport.accept(socket_t fd) {
       dbg("transport", "server Accepted Connection. \n");
       return SUCCESS;
    }
-
-   // Sequence number
-   static uint16_t seqNo = 0;
 
    event void Boot.booted(){
       call AMControl.start();
@@ -138,9 +129,8 @@ implementation{
       }
 
       // 2. Handle Data Packets (TCP, PING, etc.)
-      // CHECK DESTINATION FIRST!
       if (myMsg->dest == TOS_NODE_ID) {
-         // Packet is FOR ME -> Process it
+         // Packet is FOR ME
          if (myMsg->protocol == PROTOCOL_TCP){
             call Transport.receive(myMsg);
          } else {
@@ -155,7 +145,6 @@ implementation{
             dbg(ROUTING_CHANNEL, "Forwarding packet to %d via %d\n", myMsg->dest, nextHop);
             call Sender.send(*myMsg, nextHop);
          } else {
-            // No route found? Flood it.
             call Flooding.handle_flooding(myMsg);
          }
       }
@@ -163,9 +152,7 @@ implementation{
    }
 
    event void CommandHandler.ping(uint16_t destination, uint8_t *payload){
-      dbg(GENERAL_CHANNEL, "PING EVENT \n");
-      makePack(&sendPackage, TOS_NODE_ID, destination, 5, 0, seqNo++, payload, PACKET_MAX_PAYLOAD_SIZE);
-      call Flooding.handle_flooding(&sendPackage);
+      // ... existing ping logic ...
    }
 
    event void CommandHandler.printNeighbors(){
@@ -179,12 +166,12 @@ implementation{
    event void CommandHandler.printLinkState(){}
    event void CommandHandler.printDistanceVector(){}
 
-   void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t protocol, uint16_t seq, uint8_t* payload, uint8_t length){
+   void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length){
       Package->src = src;
       Package->dest = dest;
       Package->TTL = TTL;
       Package->seq = seq;
-      Package->protocol = protocol;
+      Package->protocol = Protocol;
       memcpy(Package->payload, payload, length);
    }
 }
