@@ -74,40 +74,83 @@ implementation{
 
    event message_t* Receive.receive(message_t* msg, void* payload, uint8_t len){
       if (len == sizeof(pack)) {
-        pack* myMsg = (pack*) payload;
-        
-        // Handle neighbor discovery packets
-        if (myMsg->protocol == PROTOCOL_NEIGHBOR_DISCOVERY) {
-            call NeighborDiscovery.handleNeighbor(myMsg);
-            return msg;
-        }
-        // Handle link state packets
+         pack* myMsg = (pack*) payload;
+         
+         // Handle neighbor discovery packets (broadcast)
+         if (myMsg->protocol == PROTOCOL_NEIGHBOR_DISCOVERY) {
+               call NeighborDiscovery.handleNeighbor(myMsg);
+               return msg;
+         }
+         
+         // Handle link state packets (broadcast)
          if (myMsg->protocol == PROTOCOL_LINKEDLIST) {
-            call LinkState.handleLSP(myMsg);
-            return msg;
+               call LinkState.handleLSP(myMsg);
+               return msg;
          }
 
-         // Handle TCP packets
-        if (myMsg->protocol == PROTOCOL_TCP) {
-            call Transport.receive(myMsg);
-            return msg;
-        }
-         
-         // Handle regular packets with routing
+         // Check if packet is for THIS node
          if (myMsg->dest == TOS_NODE_ID) {
-            dbg(GENERAL_CHANNEL, "Packet reached destination\n");
+               // Packet reached destination - now check protocol
+               
+               // Handle TCP packets at destination
+               if (myMsg->protocol == PROTOCOL_TCP) {
+                  call Transport.receive(myMsg);
+                  return msg;
+               }
+               
+               // Handle other protocols
+               dbg(GENERAL_CHANNEL, "Packet reached destination\n");
+               
          } else {
-            uint16_t nextHop = call LinkState.getNextHop(myMsg->dest);
-            if (nextHop != AM_BROADCAST_ADDR) {
-               dbg(ROUTING_CHANNEL, "Forwarding to %d via %d\n", 
-                   myMsg->dest, nextHop);
-               call Sender.send(*myMsg, nextHop);
-            } else {
-               call Flooding.handle_flooding(myMsg);
-            }
+               // Packet needs forwarding - route it
+               uint16_t nextHop = call LinkState.getNextHop(myMsg->dest);
+               
+               if (nextHop != AM_BROADCAST_ADDR) {
+                  dbg(ROUTING_CHANNEL, "Forwarding packet to %d via %d (protocol=%d)\n", 
+                     myMsg->dest, nextHop, myMsg->protocol);
+                  call Sender.send(*myMsg, nextHop);
+               } else {
+                  dbg(ROUTING_CHANNEL, "No route to %d, using flooding\n", myMsg->dest);
+                  call Flooding.handle_flooding(myMsg);
+               }
          }
       }
       return msg;
+      // if (len == sizeof(pack)) {
+      //   pack* myMsg = (pack*) payload;
+        
+      //   // Handle neighbor discovery packets
+      //   if (myMsg->protocol == PROTOCOL_NEIGHBOR_DISCOVERY) {
+      //       call NeighborDiscovery.handleNeighbor(myMsg);
+      //       return msg;
+      //   }
+      //   // Handle link state packets
+      //    if (myMsg->protocol == PROTOCOL_LINKEDLIST) {
+      //       call LinkState.handleLSP(myMsg);
+      //       return msg;
+      //    }
+
+      //    // Handle TCP packets
+      //   if (myMsg->protocol == PROTOCOL_TCP) {
+      //       call Transport.receive(myMsg);
+      //       return msg;
+      //   }
+         
+      //    // Handle regular packets with routing
+      //    if (myMsg->dest == TOS_NODE_ID) {
+      //       dbg(GENERAL_CHANNEL, "Packet reached destination\n");
+      //    } else {
+      //       uint16_t nextHop = call LinkState.getNextHop(myMsg->dest);
+      //       if (nextHop != AM_BROADCAST_ADDR) {
+      //          dbg(ROUTING_CHANNEL, "Forwarding to %d via %d\n", 
+      //              myMsg->dest, nextHop);
+      //          call Sender.send(*myMsg, nextHop);
+      //       } else {
+      //          call Flooding.handle_flooding(myMsg);
+      //       }
+      //    }
+      // }
+      // return msg;
       //   ++seqNo;
         // Handle regular packets with flooding
    //      dbg(GENERAL_CHANNEL, "Node %d received packet src=%d dest=%d seq=%d\n", 

@@ -16,7 +16,7 @@ def main():
     s.addChannel(s.TRANSPORT_CHANNEL);
     # After sending a ping, simulate a little to prevent collision.
     s.runTime(300);
-    s.cmdtestServer(1);
+    s.testServer(1);
     s.runTime(60);
     s.testClient(4);
     s.runTime(1);

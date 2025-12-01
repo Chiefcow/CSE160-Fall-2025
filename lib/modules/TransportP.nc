@@ -10,6 +10,7 @@ module TransportP {
     uses interface SimpleSend as Sender;
     uses interface Timer<TMilli> as TransportTimer;
     uses interface Timer<TMilli> as ClientWriteTimer;
+    uses interface LinkState;
 }
 
 implementation {
@@ -46,6 +47,7 @@ implementation {
                        uint8_t window, uint8_t* data, uint8_t dataLen) {
         pack tcpPacket;
         tcp_header tcpHdr;
+        uint16_t nextHop;
         
         // Build TCP header
         tcpHdr.src_port = src_port;
@@ -62,17 +64,62 @@ implementation {
         
         // Build the network packet
         tcpPacket.src = TOS_NODE_ID;
-        tcpPacket.dest = dest_addr;
+        tcpPacket.dest = dest_addr;  // Final destination
         tcpPacket.TTL = MAX_TTL;
-        tcpPacket.seq = 0; // Network-level sequence (not used for TCP)
+        tcpPacket.seq = 0;
         tcpPacket.protocol = PROTOCOL_TCP;
         
         // Copy TCP header into packet payload
         memcpy(tcpPacket.payload, &tcpHdr, sizeof(tcp_header));
         
-        // Send the packet
-        call Sender.send(tcpPacket, dest_addr);
+        // Get next hop from routing table
+        nextHop = call LinkState.getNextHop(dest_addr);
+        
+        if (nextHop == AM_BROADCAST_ADDR) {
+            // No route available, cannot send
+            dbg(TRANSPORT_CHANNEL, 
+                "Transport: No route to destination %d\n", dest_addr);
+            return;
+        }
+        
+        // Send the packet to next hop
+        dbg(TRANSPORT_CHANNEL, 
+            "Transport: Sending TCP packet to dest=%d via nextHop=%d, flags=0x%x\n",
+            dest_addr, nextHop, flags);
+        call Sender.send(tcpPacket, nextHop);
     }
+    // void sendTCPPacket(uint16_t dest_addr, uint8_t src_port, uint8_t dest_port, 
+    //                    uint16_t seq, uint16_t ack, uint8_t flags, 
+    //                    uint8_t window, uint8_t* data, uint8_t dataLen) {
+    //     pack tcpPacket;
+    //     tcp_header tcpHdr;
+        
+    //     // Build TCP header
+    //     tcpHdr.src_port = src_port;
+    //     tcpHdr.dest_port = dest_port;
+    //     tcpHdr.seq_num = seq;
+    //     tcpHdr.ack_num = ack;
+    //     tcpHdr.flags = flags;
+    //     tcpHdr.advertised_window = window;
+        
+    //     // Copy data if present (only for DATA packets, not SYN/ACK/FIN)
+    //     if (data != NULL && dataLen > 0 && (flags & TCP_FLAG_DATA)) {
+    //         memcpy(tcpHdr.data, data, dataLen);
+    //     }
+        
+    //     // Build the network packet
+    //     tcpPacket.src = TOS_NODE_ID;
+    //     tcpPacket.dest = dest_addr;
+    //     tcpPacket.TTL = MAX_TTL;
+    //     tcpPacket.seq = 0; // Network-level sequence (not used for TCP)
+    //     tcpPacket.protocol = PROTOCOL_TCP;
+        
+    //     // Copy TCP header into packet payload
+    //     memcpy(tcpPacket.payload, &tcpHdr, sizeof(tcp_header));
+        
+    //     // Send the packet
+    //     call Sender.send(tcpPacket, dest_addr);
+    // }
     
     // Find a socket by file descriptor
     socket_store_t* getSocket(socket_t fd) {

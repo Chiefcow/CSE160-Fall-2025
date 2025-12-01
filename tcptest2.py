@@ -209,7 +209,7 @@ def main():
     s.runTime(300);
     s.testServer(1);
     s.runTime(60);
-    s.testClient(4);
+    s.testClient(4, 1, 41, 80, 20);
     s.runTime(1);
     s.runTime(1000);
 
