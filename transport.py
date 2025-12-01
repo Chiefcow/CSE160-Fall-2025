@@ -27,7 +27,8 @@ def main():
     
     # Let network stabilize (neighbor discovery + routing)
     print("\n=== Network Initialization ===")
-    s.runTime(300)
+    s.runTime(600)
+    #s.runTime(300)
     
     # TEST 1: Simple Connection Setup
     print("\n=== TEST 1: Connection Setup ===")

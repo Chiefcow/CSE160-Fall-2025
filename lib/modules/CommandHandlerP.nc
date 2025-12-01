@@ -70,12 +70,21 @@ implementation{
 
             case CMD_TEST_CLIENT:
                 dbg(COMMAND_CHANNEL, "Command Type: Client\n");
-                signal CommandHandler.setTestClient();
+                {
+                    uint16_t dest = buff[0] | (buff[1] << 8);
+                    uint8_t srcPort = buff[2];
+                    uint8_t destPort = buff[3];
+                    uint16_t transfer = buff[4] | (buff[5] << 8);
+                    signal CommandHandler.setTestClient(dest, srcPort, destPort, transfer);
+                }
                 break;
 
             case CMD_TEST_SERVER:
                 dbg(COMMAND_CHANNEL, "Command Type: Client\n");
-                signal CommandHandler.setTestServer();
+                {
+                    uint8_t port = buff[0];
+                    signal CommandHandler.setTestServer(port);
+                }
                 break;
 
             default:

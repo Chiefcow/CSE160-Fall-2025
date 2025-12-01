@@ -156,14 +156,17 @@ implementation{
    //}
 
    // Implement the events from CommandHandler interface:
-   event void CommandHandler.setTestServer() {
+   event void CommandHandler.setTestServer(uint8_t port) {
+
+      cmdTestServer(port); 
       // Hardcoded test or read from a global buffer if you implemented that
-      cmdTestServer(80); 
+      // cmdTestServer(80); 
    }
 
-   event void CommandHandler.setTestClient() {
+   event void CommandHandler.setTestClient(uint16_t dest, uint8_t srcPort, uint8_t destPort, uint16_t transfer) {
+      cmdTestClient(dest, srcPort, destPort, transfer);
       // Hardcoded test
-      cmdTestClient(1, 41, 80, 100);
+      //cmdTestClient(1, 41, 80, 100);
    }
 
    event void CommandHandler.setAppServer(){}
