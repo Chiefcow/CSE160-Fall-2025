@@ -43,6 +43,14 @@ implementation {
     // Add SimpleSend for Node to send packets
     components new SimpleSendC(AM_PACK);
     Node.Sender -> SimpleSendC;
+
+    // Add Transport module
+    components TransportC;
+    Node.Transport -> TransportC;
+    
+    // Add client write timer
+    components new TimerMilliC() as ClientWriteTimerC;
+    Node.ClientWriteTimer -> ClientWriteTimerC;
     // components NeighborDiscoveryC;
     // Node.NeighborDiscovery -> SimpleSendC;
 }
