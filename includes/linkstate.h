@@ -4,7 +4,7 @@
 #define MAX_NODES 30
 #define MAX_NEIGHBORS 10
 #define LSP_TIMEOUT 250
-#define LSP_PERIOD 10000
+#define LSP_PERIOD 5000
 #define MAX_COST 999  // Changed from INFINITY to avoid conflict
 
 typedef nx_struct linkstate_packet {
