@@ -1,7 +1,7 @@
 #ifndef LINKSTATE_H
 #define LINKSTATE_H
 
-#define MAX_NODES 20
+#define MAX_NODES 30
 #define MAX_NEIGHBORS 10
 #define LSP_TIMEOUT 250
 #define LSP_PERIOD 500

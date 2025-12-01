@@ -39,15 +39,19 @@ typedef nx_struct socket_addr_t {
 } socket_addr_t;
 
 // TCP Packet Header
+enum {
+    TCP_MAX_PAYLOAD_SIZE = 10 
+};
+
 typedef nx_struct tcp_pack {
     nx_socket_port_t srcPort;
     nx_socket_port_t destPort;
     nx_uint16_t seq; 
     nx_uint16_t ack; 
-    nx_uint16_t flags; 
-    nx_uint16_t window; 
-    nx_uint8_t payload[SOCKET_BUFFER_SIZE]; 
+    nx_uint8_t flags;  // Changed to 8-bit to save space
+    nx_uint8_t window; // Changed to 8-bit to save space
     nx_uint8_t payloadLen;
+    nx_uint8_t payload[TCP_MAX_PAYLOAD_SIZE]; 
 } tcp_pack;
 
 // File descriptor id
