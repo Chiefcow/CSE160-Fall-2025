@@ -29,6 +29,8 @@ implementation {
     
     // Retransmission tracking
     uint16_t retransmitCounter[MAX_NUM_OF_SOCKETS];
+
+    // static bool initialized = FALSE;
     
     // ==================== HELPER FUNCTIONS ====================
     
@@ -59,6 +61,24 @@ implementation {
         
         dbg(TRANSPORT_CHANNEL, "Transport: Sockets initialized\n");
     }
+
+    command error_t Transport.start() {
+        static bool initialized = FALSE;
+        // static bool initialized = FALSE;
+        if (!initialized) {
+            initSockets();
+            initialized = TRUE;
+            dbg(TRANSPORT_CHANNEL, "Transport: Module started\n");
+        }
+        return SUCCESS;
+    }
+    
+
+    // command error_t Transport.start() {
+    //     initSockets();
+    //     dbg(TRANSPORT_CHANNEL, "Transport: Started\n");
+    //     return SUCCESS;
+    // }
     
     /**
      * Send a TCP packet through the network
@@ -110,6 +130,16 @@ implementation {
         
         call Sender.send(tcpPacket, nextHop);
     }
+
+    // command error_t Transport.start() {
+    //     // static bool initialized = FALSE;
+    //     if (!initialized) {
+    //         initSockets();
+    //         initialized = TRUE;
+    //         dbg(TRANSPORT_CHANNEL, "Transport: Module started\n");
+    //     }
+    //     return SUCCESS;
+    // }
     
     /**
      * Get socket by file descriptor
@@ -486,6 +516,9 @@ implementation {
                     
                     dbg(TRANSPORT_CHANNEL, 
                         "Transport: Connection ESTABLISHED (client) on socket fd=%d\n", sockFd);
+
+
+                    signal Transport.connectDone(sockFd);
                 }
             }
             return SUCCESS;

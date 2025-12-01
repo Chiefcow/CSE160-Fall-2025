@@ -1,4 +1,7 @@
 from TestSim import TestSim
+import sys
+from TOSSIM import *
+from CommandMsg import *
 
 def main():
     # Initialize simulation
@@ -20,7 +23,7 @@ def main():
     s.addChannel(s.COMMAND_CHANNEL)
     s.addChannel(s.GENERAL_CHANNEL)
     s.addChannel(s.TRANSPORT_CHANNEL)
-    s.addChannel(s.ROUTING_CHANNEL)
+    #s.addChannel(s.ROUTING_CHANNEL)
     
     # Let network stabilize (neighbor discovery + routing)
     print("\n=== Network Initialization ===")

@@ -23,9 +23,87 @@ implementation{
    pack sendPackage;
    socket_t clientFd;
    socket_t serverFd;
+
+   uint8_t data[20];
+   uint8_t i;
+   uint16_t bytesWritten;
+   static uint16_t seqNo = 0; //sequence  number for packets 
+
    
    // Prototypes
    void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length);
+
+   event void Boot.booted(){
+      call AMControl.start();
+      call NeighborDiscovery.start();
+      call Flooding.start();
+      call LinkState.start();
+      call Transport.start();
+      dbg(GENERAL_CHANNEL, "Booted\n");
+   }
+
+   event void AMControl.startDone(error_t err){
+      if(err == SUCCESS){
+         dbg(GENERAL_CHANNEL, "Radio On\n");
+      }else{
+         call AMControl.start();
+      }
+   }
+
+   event void AMControl.stopDone(error_t err){}
+
+   event message_t* Receive.receive(message_t* msg, void* payload, uint8_t len){
+      pack* myMsg = (pack*) payload;
+      
+      // Transport Hook
+      if (myMsg->protocol == PROTOCOL_TCP){
+         call Transport.receive(myMsg); // Fixed typo 'recive'
+         return msg;
+      }
+
+      if (len == sizeof(pack)) {
+        if (myMsg->protocol == PROTOCOL_NEIGHBOR_DISCOVERY) {
+            call NeighborDiscovery.handleNeighbor(myMsg);
+            return msg;
+        }
+        if (myMsg->protocol == PROTOCOL_LINKEDLIST) {
+            call LinkState.handleLSP(myMsg);
+            return msg;
+        }
+         
+        if (myMsg->dest == TOS_NODE_ID) {
+            dbg(GENERAL_CHANNEL, "Packet reached destination\n");
+        } else {
+            uint16_t nextHop = call LinkState.getNextHop(myMsg->dest);
+            if (nextHop != AM_BROADCAST_ADDR) {
+               dbg(ROUTING_CHANNEL, "Forwarding to %d via %d\n", myMsg->dest, nextHop);
+               call Sender.send(*myMsg, nextHop);
+            } else {
+               call Flooding.handle_flooding(myMsg);
+            }
+        }
+      }
+      return msg;
+   }
+
+   event void CommandHandler.ping(uint16_t destination, uint8_t *payload){
+      dbg(GENERAL_CHANNEL, "PING EVENT \n");
+      makePack(&sendPackage, TOS_NODE_ID, destination, 5, 0, seqNo++, payload, PACKET_MAX_PAYLOAD_SIZE);
+      call Flooding.handle_flooding(&sendPackage);
+   }
+
+   event void CommandHandler.printNeighbors(){
+      call NeighborDiscovery.printNeighbors();
+   }
+
+   event void CommandHandler.printRouteTable(){
+       call LinkState.printRoutingTable();
+   }
+
+   event void CommandHandler.printLinkState(){}
+   event void CommandHandler.printDistanceVector(){}
+
+
 
    // CMD_TEST_SERVER
    void cmdTestServer(uint8_t port){
@@ -92,86 +170,43 @@ implementation{
    event void CommandHandler.setAppClient(){}
 
    event void Transport.connectDone(socket_t fd){
-      dbg("transport", "client connected. Sending Data...\n");
-      // Add logic to send data here
+      // uint8_t data[20];
+      // uint16_t i;
+      // uint16_t bytesWritten;
+      
+      dbg(TRANSPORT_CHANNEL, "Client connected on socket %d. Sending data...\n", fd);
+         // Fill buffer with test data
+
+      for (i = 0; i < 20; i++) {
+         data[i] = i;
+      }
+         
+      // Write data to socket
+      bytesWritten = call Transport.write(fd, data, 20);
+      
+      dbg(TRANSPORT_CHANNEL, "Client wrote %d bytes to socket\n", bytesWritten);
+      // dbg("transport", "client connected. Sending Data...\n");
+      // // Add logic to send data here
    }
 
-   event error_t Transport.accept(socket_t fd) {
-      dbg("transport", "server Accepted Connection. \n");
-      return SUCCESS;
-   }
+   // event error_t Transport.accept(socket_t fd) {
+   //    dbg("transport", "server Accepted Connection. \n");
+   //    return SUCCESS;
+   // }
 
    // Sequence number
-   static uint16_t seqNo = 0;
+   // static uint16_t seqNo = 0;
 
-   event void Boot.booted(){
-      call AMControl.start();
-      call NeighborDiscovery.start();
-      call Flooding.start();
-      call LinkState.start();
-      dbg(GENERAL_CHANNEL, "Booted\n");
-   }
+   // event void Boot.booted(){
+   //    call AMControl.start();
+   //    call NeighborDiscovery.start();
+   //    call Flooding.start();
+   //    call LinkState.start();
+   //    call Transport.start();
+   //    dbg(GENERAL_CHANNEL, "Booted\n");
+   // }
 
-   event void AMControl.startDone(error_t err){
-      if(err == SUCCESS){
-         dbg(GENERAL_CHANNEL, "Radio On\n");
-      }else{
-         call AMControl.start();
-      }
-   }
-
-   event void AMControl.stopDone(error_t err){}
-
-   event message_t* Receive.receive(message_t* msg, void* payload, uint8_t len){
-      pack* myMsg = (pack*) payload;
-      
-      // Transport Hook
-      if (myMsg->protocol == PROTOCOL_TCP){
-         call Transport.receive(myMsg); // Fixed typo 'recive'
-         return msg;
-      }
-
-      if (len == sizeof(pack)) {
-        if (myMsg->protocol == PROTOCOL_NEIGHBOR_DISCOVERY) {
-            call NeighborDiscovery.handleNeighbor(myMsg);
-            return msg;
-        }
-        if (myMsg->protocol == PROTOCOL_LINKEDLIST) {
-            call LinkState.handleLSP(myMsg);
-            return msg;
-        }
-         
-        if (myMsg->dest == TOS_NODE_ID) {
-            dbg(GENERAL_CHANNEL, "Packet reached destination\n");
-        } else {
-            uint16_t nextHop = call LinkState.getNextHop(myMsg->dest);
-            if (nextHop != AM_BROADCAST_ADDR) {
-               dbg(ROUTING_CHANNEL, "Forwarding to %d via %d\n", myMsg->dest, nextHop);
-               call Sender.send(*myMsg, nextHop);
-            } else {
-               call Flooding.handle_flooding(myMsg);
-            }
-        }
-      }
-      return msg;
-   }
-
-   event void CommandHandler.ping(uint16_t destination, uint8_t *payload){
-      dbg(GENERAL_CHANNEL, "PING EVENT \n");
-      makePack(&sendPackage, TOS_NODE_ID, destination, 5, 0, seqNo++, payload, PACKET_MAX_PAYLOAD_SIZE);
-      call Flooding.handle_flooding(&sendPackage);
-   }
-
-   event void CommandHandler.printNeighbors(){
-      call NeighborDiscovery.printNeighbors();
-   }
-
-   event void CommandHandler.printRouteTable(){
-       call LinkState.printRoutingTable();
-   }
-
-   event void CommandHandler.printLinkState(){}
-   event void CommandHandler.printDistanceVector(){}
+   
 
    void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t protocol, uint16_t seq, uint8_t* payload, uint8_t length){
       Package->src = src;
