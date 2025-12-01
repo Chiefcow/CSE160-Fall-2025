@@ -261,7 +261,7 @@ implementation {
                     reply.TTL = MAX_TTL;
                     
                     dbg("transport", "Conn Established. Sending ACK.\n");
-                    call Sender.send(reply, reply.dest);
+                    routeAndSend(reply, reply.dest);
                 }
                 break;
             case SYN_RCVD:
@@ -300,7 +300,7 @@ implementation {
                     reply.protocol = PROTOCOL_TCP;
                     reply.TTL = MAX_TTL;
 
-                    call Sender.send(reply, reply.dest);
+                    routeAndSend(reply, reply.dest);
                 }
 
                 if (tcp->flags == TCP_FIN) {

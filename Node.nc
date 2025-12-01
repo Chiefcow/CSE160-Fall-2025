@@ -138,6 +138,7 @@ implementation{
       }
 
       // 2. Handle Data Packets (TCP, PING, etc.)
+      // CHECK DESTINATION FIRST!
       if (myMsg->dest == TOS_NODE_ID) {
          // Packet is FOR ME -> Process it
          if (myMsg->protocol == PROTOCOL_TCP){
