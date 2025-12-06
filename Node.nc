@@ -151,7 +151,7 @@ event void CommandHandler.setTestClient() {
             bytesRead = call Transport.read(acceptedSockets[i], buffer, 256);
             
             if (bytesRead > 0) {
-               dbg("Project3TGen", "Debug(%d): Data received: ", TOS_NODE_ID);
+               dbg("Project3TGen", "Debug(%d): Reading Data: ", TOS_NODE_ID);
                
                dataPtr = (uint16_t*)buffer;
                

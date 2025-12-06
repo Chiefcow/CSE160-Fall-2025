@@ -398,9 +398,12 @@ implementation {
         packet.TTL = MAX_TTL;
         packet.seq = 0;
         
-        dbg(TRANSPORT_CHANNEL, "Sending SYN to %d:%d\n", 
+        dbg(TRANSPORT_CHANNEL, "Sending SYN to %d:%d\n",
             sockets[fd].dest.addr, sockets[fd].dest.port);
         routeAndSend(packet, sockets[fd].dest.addr);
+        
+        sockets[fd].lastSent = 1;  
+        
         return SUCCESS;
     }
 
@@ -491,6 +494,7 @@ implementation {
             packet.TTL = MAX_TTL;
 
             routeAndSend(packet, sockets[fd].dest.addr);
+            sockets[fd].lastSent++;
         } 
         else if (sockets[fd].state == CLOSE_WAIT) {
             sockets[fd].state = LAST_ACK;
@@ -510,6 +514,7 @@ implementation {
             packet.TTL = MAX_TTL;
 
             routeAndSend(packet, sockets[fd].dest.addr);
+            sockets[fd].lastSent++;  // FIN consumes 1 sequence number
         }
         
         return SUCCESS;
