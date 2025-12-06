@@ -17,17 +17,17 @@ implementation {
     components MainC;
     components Node;
     components new AMReceiverC(AM_PACK) as GeneralReceive;
-
-    
+    components new TimerMilliC() as AcceptTimerC;
+    components new TimerMilliC() as ClientWriteTimerC;
 
     Node -> MainC.Boot;
-
     Node.Receive -> GeneralReceive;
+    Node.AcceptTimer -> AcceptTimerC;
+    Node.ClientWriteTimer -> ClientWriteTimerC;
 
     components ActiveMessageC;
     Node.AMControl -> ActiveMessageC;
 
-    //look here
     components CommandHandlerC;
     Node.CommandHandler -> CommandHandlerC;
 
@@ -40,13 +40,9 @@ implementation {
     components LinkStateC;
     Node.LinkState -> LinkStateC;
 
-    // Add SimpleSend for Node to send packets
     components new SimpleSendC(AM_PACK);
     Node.Sender -> SimpleSendC;
-    // components NeighborDiscoveryC;
-    // Node.NeighborDiscovery -> SimpleSendC;
 
-    //Add TransportC
     components TransportC;
     Node.Transport -> TransportC;
 }

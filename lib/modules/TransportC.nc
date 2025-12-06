@@ -6,10 +6,10 @@ configuration TransportC {
 
 implementation {
     components TransportP;
-    components new SimpleSendC(AM_PACK); // Uses Project 2 routing/flooding
+    components new SimpleSendC(AM_PACK);
     components RandomC;
     components new TimerMilliC() as TransportTimer;
-
+    components new ListC(pending_packet_t, MAX_RETRANSMIT_QUEUE) as RetransmitQueueC;
     components LinkStateC;
 
     Transport = TransportP;
@@ -17,6 +17,6 @@ implementation {
     TransportP.Sender -> SimpleSendC;
     TransportP.Random -> RandomC;
     TransportP.TransportTimer -> TransportTimer;
-
+    TransportP.RetransmitQueue -> RetransmitQueueC;
     TransportP.LinkState -> LinkStateC;
 }

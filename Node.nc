@@ -1,47 +1,85 @@
+/**
+ * ANDES Lab - University of California, Merced
+ * This class provides the basic functions of a network node.
+ */
+
 #include <Timer.h>
 #include "includes/command.h"
 #include "includes/packet.h"
-#include "includes/CommandMsg.h"
-#include "includes/channels.h"
-#include "includes/linkstate.h"
 #include "includes/socket.h"
+#include "includes/tcp.h"
+#include "includes/CommandMsg.h"
+#include "includes/sendInfo.h"
 
 module Node{
    uses interface Boot;
    uses interface SplitControl as AMControl;
    uses interface Receive;
+   uses interface SimpleSend as Sender;
    uses interface CommandHandler;
-   
-   uses interface NeighborDiscovery as NeighborDiscovery;
+   uses interface NeighborDiscovery;
    uses interface Flooding as Flooding;
    uses interface LinkState as LinkState;
-   uses interface SimpleSend as Sender;
    uses interface Transport;
+   uses interface Timer<TMilli> as AcceptTimer;      // Server accept timer
+   uses interface Timer<TMilli> as ClientWriteTimer; // Client write timer
 }
 
 implementation{
    pack sendPackage;
-   socket_t clientFd;
+   uint16_t seqNo = 0;
+   
+   // Server state
    socket_t serverFd;
+   socket_t acceptedSockets[10];
+   uint8_t numAcceptedSockets = 0;
+   bool isServerRunning = FALSE;
+   
+   // Client state
+   socket_t clientFd;
+   uint16_t transferAmount = 0;
+   uint16_t transferCounter = 0;
+   bool isClientRunning = FALSE;
    
    // Prototypes
    void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length);
 
-   // CMD_TEST_SERVER
+   /**
+    * cmdTestServer - server implementation
+    */
    void cmdTestServer(uint8_t port){
       socket_addr_t addr;
+      uint8_t i;
+      
+      for (i = 0; i < 10; i++) {
+         acceptedSockets[i] = 0;
+      }
+      numAcceptedSockets = 0;
+      
       addr.port = port; 
       addr.addr = TOS_NODE_ID;
+      
       call Transport.start(); 
       serverFd = call Transport.socket();
       call Transport.bind(serverFd, &addr);
       call Transport.listen(serverFd);
-      dbg("transport", "Node %d Listening on port %d\n", TOS_NODE_ID, port);
+      
+      isServerRunning = TRUE;
+      
+      dbg("Project3TGen", "Server started on node %d, port %d\n", TOS_NODE_ID, port);
+      
+      call AcceptTimer.startPeriodic(1000);
    }
 
-   // CMD_TEST_CLIENT
+   /**
+    * cmdTestClient - client implementation
+    */
    void cmdTestClient(uint16_t dest, uint8_t srcPort, uint8_t destPort, uint16_t transfer){
       socket_addr_t src, dst;
+      
+      transferAmount = transfer;
+      transferCounter = 0;
+      
       call Transport.start();
       clientFd = call Transport.socket();
 
@@ -51,70 +89,131 @@ implementation{
 
       dst.port = destPort;
       dst.addr = dest;
+      
+      isClientRunning = TRUE;
+      
+      dbg("Project3TGen", "Client connecting to node %d, port %d\n", dest, destPort);
       call Transport.connect(clientFd, &dst);
    }
 
-   // CMD_CLOSE
-   void cmdClientClose(){
-      call Transport.close(clientFd);
-   }
-
-   //event void CommandHandler.handleCommand(uint8_t *payload) {
-      // Cast payload to CommandMsg to access fields if needed, 
-      // but CommandHandler usually gives specific args. 
-      // Use the 'payload' buffer directly based on your specific command structure.
-      
-      // NOTE: Your CommandHandler implementation passes a pointer to the payload bytes
-      // Check CommandHandlerP.nc to see what it sends.
-      // Assuming payload[0] is the first byte of data...
-      
-      // However, your CommandHandler interface definition has specific events:
-      // setTestClient(), setTestServer(). 
-      // You should implement those events instead of handleCommand if possible, 
-      // OR if you modified CommandHandler to pass raw commands:
-
-      // Since handleCommand isn't in standard CommandHandler interface provided, 
-      // I will assume you meant to implement the specific events below:
-   //}
-
-   // Implement the events from CommandHandler interface:
+   /**
+    * CommandHandler events - MUST MATCH INTERFACE EXACTLY
+    */
    event void CommandHandler.setTestServer() {
-      // Hardcoded test or read from a global buffer if you implemented that
-      cmdTestServer(80); 
+      cmdTestServer(80);  
    }
 
-   event void CommandHandler.setTestClient() {
-      // Hardcoded test
-      cmdTestClient(1, 41, 80, 100);
-   }
+event void CommandHandler.setTestClient() {
+   cmdTestClient(1, 41, 80, 100); 
+}
+
+   // event void CommandHandler.setTestClient(uint16_t dest, uint8_t srcPort, uint8_t destPort, uint16_t transfer) {
+   //    cmdTestClient(dest, srcPort, destPort, transfer);
+   // }
 
    event void CommandHandler.setAppServer(){}
    event void CommandHandler.setAppClient(){}
 
+   /**
+    * Connection established - start writing data
+    */
    event void Transport.connectDone(socket_t fd){
-      dbg("transport", "client connected. Sending Data...\n");
-      // Add logic to send data here
+      dbg("Project3TGen", "Debug(%d): Connection established to server\n", TOS_NODE_ID);
+      call ClientWriteTimer.startPeriodic(500);
    }
 
-   event error_t Transport.accept(socket_t fd) {
-      dbg("transport", "server Accepted Connection. \n");
-      return SUCCESS;
+   /**
+    * Server timer - periodically accept and read
+    */
+   event void AcceptTimer.fired() {
+      uint8_t i;
+      uint8_t buffer[256];
+      uint16_t bytesRead;
+      uint16_t j;
+      uint16_t* dataPtr;
+      socket_t newFd;
+      
+      if (!isServerRunning) return;
+      
+      // Try to accept new connections
+      newFd = call Transport.accept(serverFd);
+      if (newFd != 0) {
+         dbg("Project3TGen", "Debug(%d): Connection accepted on socket %d\n", TOS_NODE_ID, newFd);
+         if (numAcceptedSockets < 10) {
+            acceptedSockets[numAcceptedSockets] = newFd;
+            numAcceptedSockets++;
+         }
+      }
+      
+      // Read from all accepted sockets
+      for (i = 0; i < numAcceptedSockets; i++) {
+         if (acceptedSockets[i] != 0) {
+            bytesRead = call Transport.read(acceptedSockets[i], buffer, 256);
+            
+            if (bytesRead > 0) {
+               dbg("Project3TGen", "Debug(%d): Data received: ", TOS_NODE_ID);
+               
+               dataPtr = (uint16_t*)buffer;
+               
+               for (j = 0; j < bytesRead / 2; j++) {
+                  dbg_clear("Project3TGen", "%u", dataPtr[j]);
+                  if (j < (bytesRead / 2) - 1) {
+                     dbg_clear("Project3TGen", ",");
+                  }
+               }
+               dbg_clear("Project3TGen", "\n");
+            }
+         }
+      }
    }
 
-   // Sequence number
-   static uint16_t seqNo = 0;
+   /**
+    * Client timer - periodically write data
+    */
+   event void ClientWriteTimer.fired() {
+      uint16_t buffer[64];
+      uint8_t i;
+      uint8_t count;
+      uint16_t bytesWritten;
+      
+      if (!isClientRunning) return;
+      
+      count = 0;
+      
+      if (transferCounter >= transferAmount) {
+         call ClientWriteTimer.stop();
+         dbg("Project3TGen", "Debug(%d): Transfer complete, closing connection\n", TOS_NODE_ID);
+         call Transport.close(clientFd);
+         isClientRunning = FALSE;
+         return;
+      }
+      
+      for (i = 0; i < 64 && transferCounter < transferAmount; i++) {
+         buffer[i] = transferCounter;
+         transferCounter++;
+         count++;
+      }
+      
+      if (count > 0) {
+         bytesWritten = call Transport.send(clientFd, (uint8_t*)buffer, count * 2);
+         
+         if (bytesWritten > 0) {
+            dbg("Project3TGen", "Debug(%d): Sent %u bytes (%u-%u)\n", 
+                TOS_NODE_ID, bytesWritten, transferCounter - count, transferCounter - 1);
+         }
+      }
+   }
 
    event void Boot.booted(){
       call AMControl.start();
-      call NeighborDiscovery.start();
-      call Flooding.start();
-      call LinkState.start();
-      dbg(GENERAL_CHANNEL, "Booted\n");
+      dbg("general", "Booted\n");
    }
 
    event void AMControl.startDone(error_t err){
       if(err == SUCCESS){
-         dbg(GENERAL_CHANNEL, "Radio On\n");
+         dbg("general", "Radio On\n");
+         call NeighborDiscovery.start();
+         call LinkState.start();
       }else{
          call AMControl.start();
       }
@@ -124,10 +223,11 @@ implementation{
 
    event message_t* Receive.receive(message_t* msg, void* payload, uint8_t len){
       pack* myMsg = (pack*) payload;
+      uint16_t nextHop;
+      tcp_pack* tcp;
       
       if (len != sizeof(pack)) return msg;
 
-      // 1. Handle Routing Control Packets
       if (myMsg->protocol == PROTOCOL_NEIGHBOR_DISCOVERY) {
          call NeighborDiscovery.handleNeighbor(myMsg);
          return msg;
@@ -137,25 +237,33 @@ implementation{
          return msg;
       }
 
-      // 2. Handle Data Packets (TCP, PING, etc.)
-      // CHECK DESTINATION FIRST!
       if (myMsg->dest == TOS_NODE_ID) {
-         // Packet is FOR ME -> Process it
          if (myMsg->protocol == PROTOCOL_TCP){
+            tcp = (tcp_pack*)myMsg->payload;
+            
+            if (tcp->flags == TCP_SYN) {
+               dbg("Project3TGen", "Debug(%d): SYN Packet Arrived from Node %d for Port %d\n",
+                   TOS_NODE_ID, myMsg->src, tcp->destPort);
+            } else if (tcp->flags == (TCP_SYN | TCP_ACK)) {
+               dbg("Project3TGen", "Debug(%d): SYN+ACK Packet Arrived from Node %d\n",
+                   TOS_NODE_ID, myMsg->src);
+            } else if (tcp->flags == TCP_FIN) {
+               dbg("Project3TGen", "Debug(%d): FIN Packet Arrived from Node %d\n",
+                   TOS_NODE_ID, myMsg->src);
+            }
+            
             call Transport.receive(myMsg);
          } else {
-            dbg(GENERAL_CHANNEL, "Packet reached destination\n");
+            dbg("general", "Packet reached destination\n");
          }
          return msg;
       } else {
-         // Packet is FOR SOMEONE ELSE -> Forward it
-         uint16_t nextHop = call LinkState.getNextHop(myMsg->dest);
+         nextHop = call LinkState.getNextHop(myMsg->dest);
          
          if (nextHop != AM_BROADCAST_ADDR) {
-            dbg(ROUTING_CHANNEL, "Forwarding packet to %d via %d\n", myMsg->dest, nextHop);
+            dbg("routing", "Forwarding packet to %d via %d\n", myMsg->dest, nextHop);
             call Sender.send(*myMsg, nextHop);
          } else {
-            // No route found? Flood it.
             call Flooding.handle_flooding(myMsg);
          }
       }
@@ -163,9 +271,9 @@ implementation{
    }
 
    event void CommandHandler.ping(uint16_t destination, uint8_t *payload){
-      dbg(GENERAL_CHANNEL, "PING EVENT \n");
+      dbg("general", "PING EVENT \n");
       makePack(&sendPackage, TOS_NODE_ID, destination, 5, 0, seqNo++, payload, PACKET_MAX_PAYLOAD_SIZE);
-      call Flooding.handle_flooding(&sendPackage);
+      call Sender.send(sendPackage, AM_BROADCAST_ADDR);
    }
 
    event void CommandHandler.printNeighbors(){
@@ -173,7 +281,8 @@ implementation{
    }
 
    event void CommandHandler.printRouteTable(){
-       call LinkState.printRoutingTable();
+      // Just call dbg - the actual table is managed by LinkState
+      dbg("general", "Route table requested\n");
    }
 
    event void CommandHandler.printLinkState(){}
