@@ -6,7 +6,7 @@ configuration TransportC {
 
 implementation {
     components TransportP;
-    components new SimpleSendC(AM_PACK); // Uses Project 2 routing/flooding
+    components new SimpleSendC(AM_PACK);
     components RandomC;
     components new TimerMilliC() as TransportTimer;
 

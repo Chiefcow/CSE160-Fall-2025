@@ -17,13 +17,21 @@ module Node{
    uses interface LinkState as LinkState;
    uses interface SimpleSend as Sender;
    uses interface Transport;
+   
+   // Timer for sending data in chunks
+   uses interface Timer<TMilli> as ClientWriteTimer;
 }
 
 implementation{
    pack sendPackage;
    socket_t clientFd;
    socket_t serverFd;
-   uint16_t transfer_amount = 0; // Store the amount to transfer
+   
+   // Client transfer state
+   uint16_t transfer_amount = 0;      // Total bytes to transfer
+   uint16_t bytes_sent = 0;           // Bytes written to transport so far
+   uint8_t dataBuffer[256];           // Buffer holding data to send (support up to 256 bytes)
+   bool transfer_in_progress = FALSE;
    
    // Prototypes
    void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length);
@@ -43,8 +51,16 @@ implementation{
    // CMD_TEST_CLIENT
    void cmdTestClient(uint16_t dest, uint8_t srcPort, uint8_t destPort, uint16_t transfer){
       socket_addr_t src, dst;
+      uint16_t i;
       
-      transfer_amount = transfer; // Save for later
+      transfer_amount = transfer;
+      bytes_sent = 0;
+      transfer_in_progress = FALSE;
+
+      // Pre-generate all the data (1, 2, 3, 4, ...)
+      for(i = 0; i < transfer_amount && i < 256; i++){
+          dataBuffer[i] = (i + 1) & 0xFF;  // Wrap around for values > 255
+      }
 
       call Transport.start();
       clientFd = call Transport.socket();
@@ -68,26 +84,61 @@ implementation{
    }
 
    event void CommandHandler.setTestClient() {
-      cmdTestClient(1, 41, 80, 100);
+      cmdTestClient(1, 41, 80, 300);
    }
 
    event void CommandHandler.setAppServer(){}
    event void CommandHandler.setAppClient(){}
 
-   // --- THIS IS THE FIX ---
+   // Called when connection is established
    event void Transport.connectDone(socket_t fd){
-      uint16_t i;
-      uint8_t dataBuffer[SOCKET_BUFFER_SIZE]; // Temp buffer
-      
       dbg("transport", "client connected. Sending %d bytes...\n", transfer_amount);
       
-      // Generate data (1, 2, 3...)
-      for(i = 0; i < transfer_amount && i < SOCKET_BUFFER_SIZE; i++){
-          dataBuffer[i] = i + 1;
+      transfer_in_progress = TRUE;
+      bytes_sent = 0;
+      
+      // Start the write timer - will fire immediately and then periodically
+      call ClientWriteTimer.startPeriodic(100);  // Try every 100ms
+   }
+   
+   // Timer event - periodically try to send more data
+   event void ClientWriteTimer.fired() {
+      uint16_t bytesToSend;
+      uint16_t bytesWritten;
+      
+      if (!transfer_in_progress) {
+         call ClientWriteTimer.stop();
+         return;
       }
       
-      // Send data
-      call Transport.send(fd, dataBuffer, transfer_amount);
+      // Check if we have more data to send
+      if (bytes_sent >= transfer_amount) {
+         // All data has been written to the transport layer
+         // The transport layer will close when all data is ACKed
+         dbg("transport", "All %d bytes written to transport. Waiting for ACKs...\n", transfer_amount);
+         transfer_in_progress = FALSE;
+         call ClientWriteTimer.stop();
+         return;
+      }
+      
+      // Calculate how many bytes to try to send this time
+      bytesToSend = transfer_amount - bytes_sent;
+      
+      // Try to write data starting from where we left off
+      bytesWritten = call Transport.send(clientFd, &dataBuffer[bytes_sent], bytesToSend);
+      
+      if (bytesWritten > 0) {
+         bytes_sent += bytesWritten;
+         dbg("transport", "Application: Wrote %d bytes (total: %d/%d)\n", 
+             bytesWritten, bytes_sent, transfer_amount);
+      }
+      
+      // If we've sent everything, stop the timer
+      if (bytes_sent >= transfer_amount) {
+         dbg("transport", "All %d bytes written to transport. Waiting for ACKs...\n", transfer_amount);
+         transfer_in_progress = FALSE;
+         call ClientWriteTimer.stop();
+      }
    }
 
    event error_t Transport.accept(socket_t fd) {

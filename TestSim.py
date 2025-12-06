@@ -75,7 +75,7 @@ class TestSim:
     # Wrapper for the Client test
     # Usage: s.testClient(client_id, dest_id=1, src_port=90, dest_port=80, transfer=100)
     # Added dest=1 default to support legacy calls like s.testClient(4)
-    def testClient(self, address, dest=1, srcPort=90, destPort=80, transfer=100):
+    def testClient(self, address, dest=1, srcPort=90, destPort=80, transfer=150):
         print "Node " + str(address) + " connecting to Node " + str(dest) + \
               " : " + str(destPort) + " transferring " + str(transfer)
         # Arguments: (ClientNodeID, DestNodeID, SrcPort, DestPort, TransferAmount)
@@ -83,10 +83,7 @@ class TestSim:
     
     
 
-    # In main():
-    # s.cmdTestServer(1, 80)
-    # s.runTime(10)
-    # s.cmdTestClient(2, 1, 90, 80, 100)
+
 
     # Load a topo file and use it.
     def loadTopo(self, topoFile):
@@ -189,5 +186,8 @@ def main():
     s.ping(1, 3, "Hi!");
     s.runTime(20);
 
+    s.cmdTestServer(1, 80)
+    s.runTime(10)
+    s.cmdTestClient(2, 1, 90, 80, 150)
 if __name__ == '__main__':
     main()

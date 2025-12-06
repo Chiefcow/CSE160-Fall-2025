@@ -10,14 +10,41 @@ module TransportP {
     uses interface SimpleSend as Sender;
     uses interface Random;
     uses interface Timer<TMilli> as TransportTimer;
-    uses interface List<pack> as PacketQueue;
 }
 
 implementation {
     socket_store_t sockets[MAX_NUM_OF_SOCKETS];
+    
+    // Track transfer progress for each socket
+    uint16_t totalToSend[MAX_NUM_OF_SOCKETS];    // Total bytes application wants to send
+    uint16_t totalWritten[MAX_NUM_OF_SOCKETS];   // Total bytes written to buffer so far
+    bool transferComplete[MAX_NUM_OF_SOCKETS];
+
+    // Calculate available space in send buffer
+    uint8_t getSendBufferSpace(uint8_t fd) {
+        uint16_t inFlight;
+        
+        // Data in flight = lastWritten - lastAck
+        if (sockets[fd].lastWritten >= sockets[fd].lastAck) {
+            inFlight = sockets[fd].lastWritten - sockets[fd].lastAck;
+        } else {
+            inFlight = 0;
+        }
+        
+        // Leave 1 slot to distinguish full from empty
+        if (inFlight >= SOCKET_BUFFER_SIZE - 1) {
+            return 0;
+        }
+        return SOCKET_BUFFER_SIZE - 1 - inFlight;
+    }
 
     uint8_t getAdvertisedWindow(uint8_t fd) {
-        uint16_t used = sockets[fd].lastRcvd - sockets[fd].lastRead;
+        uint16_t used;
+        if (sockets[fd].lastRcvd >= sockets[fd].lastRead) {
+            used = sockets[fd].lastRcvd - sockets[fd].lastRead;
+        } else {
+            used = 0;
+        }
         if (used >= SOCKET_BUFFER_SIZE) return 0;
         return SOCKET_BUFFER_SIZE - used;
     }
@@ -26,7 +53,6 @@ implementation {
         uint8_t i;
         uint8_t listenFd = 0;
 
-        // First pass: look for an established/active connection match
         for (i = 0; i < MAX_NUM_OF_SOCKETS; i++) {
             if (sockets[i].flag == 0) continue;
             if (sockets[i].state != LISTEN &&
@@ -35,12 +61,10 @@ implementation {
                 sockets[i].dest.port == srcPort) {
                 return i;
             }
-            // Remember a matching listener in case no active connection is found
             if (listenFd == 0 && sockets[i].state == LISTEN && sockets[i].src == destPort) {
                 listenFd = i;
             }
         }
-
         return listenFd; 
     }
 
@@ -52,7 +76,6 @@ implementation {
         call Sender.send(packet, nextHop);
     }
 
-    // Handle inbound data and always send an ACK (even for out-of-order)
     void handleInboundData(socket_t fd, tcp_pack* tcp) {
         pack reply;
         tcp_pack* replyTcp;
@@ -77,6 +100,7 @@ implementation {
             dbg("transport", "Out-of-order DATA Seq: %d Expected: %d\n", tcp->seq, sockets[fd].nextExpected);
         }
 
+        // Always send ACK
         replyTcp = (tcp_pack*)reply.payload;
         replyTcp->srcPort = sockets[fd].src;
         replyTcp->destPort = sockets[fd].dest.port;
@@ -99,8 +123,10 @@ implementation {
         uint8_t i;
         for(i=0; i<MAX_NUM_OF_SOCKETS; i++) {
             sockets[i].flag = 0;
+            totalToSend[i] = 0;
+            totalWritten[i] = 0;
+            transferComplete[i] = FALSE;
         }
-        // FIX: Increase timer to 500ms to reduce timeout spam in large topologies
         call TransportTimer.startPeriodic(500); 
         return SUCCESS;
     }
@@ -111,13 +137,16 @@ implementation {
             if (sockets[i].flag == 0) {
                 sockets[i].flag = 1;
                 sockets[i].state = CLOSED;
-                sockets[i].RTT = 100; // Increased RTT estimate
+                sockets[i].RTT = 100;
                 sockets[i].lastWritten = 0;
                 sockets[i].lastAck = 0;
                 sockets[i].lastSent = 0;
                 sockets[i].lastRead = 0;
                 sockets[i].lastRcvd = 0;
                 sockets[i].nextExpected = 1; 
+                totalToSend[i] = 0;
+                totalWritten[i] = 0;
+                transferComplete[i] = FALSE;
                 return i;
             }
         }
@@ -149,12 +178,10 @@ implementation {
         tcp->srcPort = sockets[fd].src;
         tcp->destPort = sockets[fd].dest.port;
         
-        // FIX: SYN consumes sequence number 1. 
-        // We must advance lastSent/lastWritten so the buffer logic stays aligned.
         sockets[fd].lastSent = 0; 
         sockets[fd].lastWritten = 0;
         
-        tcp->seq = sockets[fd].lastSent + 1; // Send Seq 1
+        tcp->seq = sockets[fd].lastSent + 1;
         tcp->flags = TCP_SYN;
         tcp->window = getAdvertisedWindow(fd);
         tcp->payloadLen = 0;
@@ -167,10 +194,9 @@ implementation {
 
         dbg("transport", "Sending SYN to %d port %d\n", sockets[fd].dest.addr, sockets[fd].dest.port);
         
-        // FIX: Advance pointers so future data writes start at index 1 (matching ACK 1)
-        // This effectively reserves "slot 0" for the SYN
-        sockets[fd].lastSent++;     // Now 1
-        sockets[fd].lastWritten++;  // Now 1
+        // SYN consumes sequence 1
+        sockets[fd].lastSent++;
+        sockets[fd].lastWritten++;
         
         routeAndSend(packet, sockets[fd].dest.addr);
         return SUCCESS;
@@ -184,7 +210,8 @@ implementation {
 
         if(sockets[fd].state != ESTABLISHED) return;
 
-        if(sockets[fd].lastWritten > sockets[fd].lastSent) {
+        // Send data if we have unsent data in the buffer
+        while(sockets[fd].lastWritten > sockets[fd].lastSent) {
             uint8_t maxPayload = TCP_MAX_PAYLOAD_SIZE; 
             
             tcp = (tcp_pack*)packet.payload;
@@ -217,25 +244,38 @@ implementation {
         }
     }
 
-    command error_t Transport.send(socket_t fd, uint8_t *buff, uint16_t bufflen) {
+    // Returns number of bytes actually written to buffer
+    command uint16_t Transport.send(socket_t fd, uint8_t *buff, uint16_t bufflen) {
         uint16_t i;
-        if (sockets[fd].state != ESTABLISHED) return FAIL;
+        uint16_t bytesWritten = 0;
+        uint8_t availableSpace;
+        
+        if (fd == 0 || fd >= MAX_NUM_OF_SOCKETS) return 0;
+        if (sockets[fd].state != ESTABLISHED) return 0;
 
-        for(i=0; i<bufflen; i++) {
-             uint16_t nextIdx = (sockets[fd].lastWritten + 1) % SOCKET_BUFFER_SIZE;
-             
-             // Check if buffer is full
-             if(nextIdx == sockets[fd].lastAck % SOCKET_BUFFER_SIZE) {
-                 // Buffer is full
-                 break; 
-             }
-             
-             sockets[fd].lastWritten++;
-             sockets[fd].sendBuff[sockets[fd].lastWritten % SOCKET_BUFFER_SIZE] = buff[i];
+        // Set the total if this is a new transfer
+        if (totalToSend[fd] == 0) {
+            totalToSend[fd] = bufflen;
+            totalWritten[fd] = 0;
+            transferComplete[fd] = FALSE;
+            dbg("transport", "Starting transfer of %d bytes\n", bufflen);
         }
 
+        availableSpace = getSendBufferSpace(fd);
+
+        for(i = 0; i < bufflen && bytesWritten < availableSpace; i++) {
+            sockets[fd].lastWritten++;
+            sockets[fd].sendBuff[sockets[fd].lastWritten % SOCKET_BUFFER_SIZE] = buff[i];
+            bytesWritten++;
+        }
+        
+        totalWritten[fd] += bytesWritten;
+        
+        dbg("transport", "Wrote %d bytes to buffer (total: %d/%d)\n", 
+            bytesWritten, totalWritten[fd], totalToSend[fd]);
+
         sendData(fd);
-        return SUCCESS;
+        return bytesWritten;
     }
 
     command error_t Transport.close(socket_t fd) {
@@ -260,6 +300,7 @@ implementation {
         packet.TTL = MAX_TTL;
         packet.seq = 0; 
 
+        dbg("transport", "Sending FIN to close connection\n");
         routeAndSend(packet, sockets[fd].dest.addr);
         return SUCCESS;
     }
@@ -269,14 +310,11 @@ implementation {
         uint8_t fd;
         pack reply;
         tcp_pack* replyTcp;
-        uint8_t i;
 
         fd = findSocket(msg->src, tcp->srcPort, msg->dest, tcp->destPort);
         
         // Handle New Connection (Listen State)
         if (fd != 0 && sockets[fd].state == LISTEN && tcp->flags == TCP_SYN) {
-            
-            // FIX: Check if we already have a connection for this pair to avoid duplicate sockets
             uint8_t checkFd = 0;
             uint8_t k;
             for(k=1; k<MAX_NUM_OF_SOCKETS; k++) {
@@ -288,7 +326,6 @@ implementation {
             }
 
             if(checkFd == 0) {
-                // No existing connection, accept new one
                 uint8_t newFd = call Transport.socket();
                 if (newFd != 0) {
                     sockets[newFd].state = SYN_RCVD;
@@ -299,7 +336,6 @@ implementation {
                     
                     signal Transport.accept(newFd);
                     
-                    // Respond with SYN+ACK
                     replyTcp = (tcp_pack*)reply.payload;
                     replyTcp->srcPort = sockets[newFd].src;
                     replyTcp->destPort = sockets[newFd].dest.port;
@@ -318,19 +354,15 @@ implementation {
                     dbg("transport", "Received SYN, sending SYN+ACK\n");
                     routeAndSend(reply, reply.dest);
 
-                    // Reserve sequence number for the SYN+ACK so later data starts at seq 2
                     sockets[newFd].lastSent++;
                     sockets[newFd].lastWritten++;
                 }
             } else {
-                // Connection exists (Retransmission handling)
-                // Just resend the SYN+ACK for the existing socket
                 dbg("transport", "Duplicate SYN. Resending SYN+ACK.\n");
                 
                 replyTcp = (tcp_pack*)reply.payload;
                 replyTcp->srcPort = sockets[checkFd].src;
                 replyTcp->destPort = sockets[checkFd].dest.port;
-                // Resend original SYN+ACK sequence number (do not advance)
                 replyTcp->seq = sockets[checkFd].lastSent; 
                 replyTcp->ack = sockets[checkFd].nextExpected;
                 replyTcp->flags = TCP_SYN + TCP_ACK;
@@ -354,7 +386,6 @@ implementation {
             case SYN_SENT:
                 if (tcp->flags == (TCP_SYN + TCP_ACK)) {
                     sockets[fd].state = ESTABLISHED;
-                    // Align ack tracker with the SYN we already sent (SYN consumes seq 1)
                     sockets[fd].lastAck = (tcp->ack > 0) ? tcp->ack - 1 : 0;
                     sockets[fd].nextExpected = tcp->seq + 1;
                     
@@ -363,7 +394,7 @@ implementation {
                     replyTcp = (tcp_pack*)reply.payload;
                     replyTcp->srcPort = sockets[fd].src;
                     replyTcp->destPort = sockets[fd].dest.port;
-                    replyTcp->seq = sockets[fd].lastSent; // SEQ is current
+                    replyTcp->seq = sockets[fd].lastSent;
                     replyTcp->ack = sockets[fd].nextExpected;
                     replyTcp->flags = TCP_ACK;
                     replyTcp->window = getAdvertisedWindow(fd);
@@ -383,11 +414,9 @@ implementation {
             case SYN_RCVD:
                 if (tcp->flags == TCP_ACK) {
                     sockets[fd].state = ESTABLISHED;
-                    // SYN+ACK consumed seq 1, so track that as acknowledged
                     sockets[fd].lastAck = (tcp->ack > 0) ? tcp->ack - 1 : 0;
                     dbg("transport", "Server Established.\n");
                 } else if (tcp->flags == TCP_DATA) {
-                    // If the final ACK was lost but data arrived, treat it as implicit establishment
                     sockets[fd].state = ESTABLISHED;
                     sockets[fd].lastAck = (sockets[fd].nextExpected > 0) ? sockets[fd].nextExpected - 1 : 0;
                     dbg("transport", "Server Established via DATA.\n");
@@ -401,18 +430,140 @@ implementation {
                 }
 
                 if (tcp->flags == TCP_FIN) {
-                     sockets[fd].state = CLOSE_WAIT;
-                     sockets[fd].flag = 0; 
-                     dbg("transport", "Connection Closed by peer.\n");
+                    sockets[fd].state = CLOSE_WAIT;
+                    
+                    replyTcp = (tcp_pack*)reply.payload;
+                    replyTcp->srcPort = sockets[fd].src;
+                    replyTcp->destPort = sockets[fd].dest.port;
+                    replyTcp->seq = sockets[fd].lastSent;
+                    replyTcp->ack = tcp->seq + 1;
+                    replyTcp->flags = TCP_ACK;
+                    replyTcp->window = getAdvertisedWindow(fd);
+                    replyTcp->payloadLen = 0;
+                    
+                    reply.src = TOS_NODE_ID;
+                    reply.dest = sockets[fd].dest.addr;
+                    reply.protocol = PROTOCOL_TCP;
+                    reply.TTL = MAX_TTL;
+                    reply.seq = 0;
+                    
+                    dbg("transport", "Received FIN, sending ACK. Connection closing.\n");
+                    routeAndSend(reply, reply.dest);
+                    
+                    call Transport.close(fd);
                 }
                 
                 if (tcp->flags == TCP_ACK) {
                     if(tcp->ack > sockets[fd].lastAck) {
-                        // TCP ACK carries next expected sequence; track last byte ACKed
                         sockets[fd].lastAck = (tcp->ack > 0) ? tcp->ack - 1 : 0;
-                        sendData(fd);
+                        
+                        dbg("transport", "ACK received: %d (lastAck now %d, lastWritten %d)\n", 
+                            tcp->ack, sockets[fd].lastAck, sockets[fd].lastWritten);
+                        
+                        // Check if ALL data has been acknowledged
+                        if(totalToSend[fd] > 0 && 
+                           totalWritten[fd] >= totalToSend[fd] &&
+                           sockets[fd].lastAck >= sockets[fd].lastWritten && 
+                           !transferComplete[fd]) {
+                            transferComplete[fd] = TRUE;
+                            dbg("transport", "Transfer Complete! All %d bytes acknowledged.\n", totalToSend[fd]);
+                            call Transport.close(fd);
+                        } else {
+                            // Try to send more data
+                            sendData(fd);
+                        }
                     }
                 }
+                break;
+
+            case FIN_WAIT_1:
+                if (tcp->flags == TCP_ACK) {
+                    sockets[fd].state = FIN_WAIT_2;
+                    dbg("transport", "FIN_WAIT_1 -> FIN_WAIT_2\n");
+                }
+                if (tcp->flags == TCP_FIN) {
+                    sockets[fd].state = TIME_WAIT;
+                    
+                    replyTcp = (tcp_pack*)reply.payload;
+                    replyTcp->srcPort = sockets[fd].src;
+                    replyTcp->destPort = sockets[fd].dest.port;
+                    replyTcp->seq = sockets[fd].lastSent;
+                    replyTcp->ack = tcp->seq + 1;
+                    replyTcp->flags = TCP_ACK;
+                    replyTcp->window = 0;
+                    replyTcp->payloadLen = 0;
+                    
+                    reply.src = TOS_NODE_ID;
+                    reply.dest = sockets[fd].dest.addr;
+                    reply.protocol = PROTOCOL_TCP;
+                    reply.TTL = MAX_TTL;
+                    reply.seq = 0;
+                    
+                    routeAndSend(reply, reply.dest);
+                    dbg("transport", "Received FIN in FIN_WAIT_1, sent ACK. TIME_WAIT\n");
+                }
+                break;
+                
+            case FIN_WAIT_2:
+                if (tcp->flags == TCP_FIN) {
+                    sockets[fd].state = TIME_WAIT;
+                    
+                    replyTcp = (tcp_pack*)reply.payload;
+                    replyTcp->srcPort = sockets[fd].src;
+                    replyTcp->destPort = sockets[fd].dest.port;
+                    replyTcp->seq = sockets[fd].lastSent;
+                    replyTcp->ack = tcp->seq + 1;
+                    replyTcp->flags = TCP_ACK;
+                    replyTcp->window = 0;
+                    replyTcp->payloadLen = 0;
+                    
+                    reply.src = TOS_NODE_ID;
+                    reply.dest = sockets[fd].dest.addr;
+                    reply.protocol = PROTOCOL_TCP;
+                    reply.TTL = MAX_TTL;
+                    reply.seq = 0;
+                    
+                    routeAndSend(reply, reply.dest);
+                    dbg("transport", "Received FIN in FIN_WAIT_2, sent ACK. Connection CLOSED.\n");
+                    
+                    sockets[fd].flag = 0;
+                    sockets[fd].state = CLOSED;
+                }
+                break;
+                
+            case CLOSE_WAIT:
+                break;
+                
+            case LAST_ACK:
+                if (tcp->flags == TCP_ACK) {
+                    dbg("transport", "Received final ACK. Connection CLOSED.\n");
+                    sockets[fd].flag = 0;
+                    sockets[fd].state = CLOSED;
+                }
+                break;
+                
+            case TIME_WAIT:
+                if (tcp->flags == TCP_FIN) {
+                    replyTcp = (tcp_pack*)reply.payload;
+                    replyTcp->srcPort = sockets[fd].src;
+                    replyTcp->destPort = sockets[fd].dest.port;
+                    replyTcp->seq = sockets[fd].lastSent;
+                    replyTcp->ack = tcp->seq + 1;
+                    replyTcp->flags = TCP_ACK;
+                    replyTcp->window = 0;
+                    replyTcp->payloadLen = 0;
+                    
+                    reply.src = TOS_NODE_ID;
+                    reply.dest = sockets[fd].dest.addr;
+                    reply.protocol = PROTOCOL_TCP;
+                    reply.TTL = MAX_TTL;
+                    reply.seq = 0;
+                    
+                    routeAndSend(reply, reply.dest);
+                }
+                break;
+
+            default:
                 break;
         }
         return SUCCESS;
@@ -422,36 +573,43 @@ implementation {
         uint8_t i;
         for(i=1; i<MAX_NUM_OF_SOCKETS; i++) {
             if(sockets[i].flag) {
-                // Retransmit Data
-                if (sockets[i].state == ESTABLISHED && sockets[i].lastSent > sockets[i].lastAck) {
+                // Retransmit unacked data
+                if (sockets[i].state == ESTABLISHED && 
+                    sockets[i].lastSent > sockets[i].lastAck &&
+                    !transferComplete[i]) {
                     dbg("transport", "Timeout! Retransmitting from %d\n", sockets[i].lastAck);
                     sockets[i].lastSent = sockets[i].lastAck;
                     sendData(i);
                 }
                 
-                // Retransmit SYN if stuck in SYN_SENT
+                // Retransmit SYN
                 if (sockets[i].state == SYN_SENT) {
+                    pack packet;
+                    tcp_pack* tcp = (tcp_pack*)packet.payload;
+                    
                     dbg("transport", "Handshake Timeout! Retrying SYN...\n");
-                    // We can't call connect again directly as it resets pointers
-                    // Instead, just resend the SYN packet constructed from socket state
-                    {
-                        pack packet;
-                        tcp_pack* tcp = (tcp_pack*)packet.payload;
-                        tcp->srcPort = sockets[i].src;
-                        tcp->destPort = sockets[i].dest.port;
-                        tcp->seq = 1; // SYN is always seq 1 in our logic
-                        tcp->flags = TCP_SYN;
-                        tcp->window = getAdvertisedWindow(i);
-                        tcp->payloadLen = 0;
+                    
+                    tcp->srcPort = sockets[i].src;
+                    tcp->destPort = sockets[i].dest.port;
+                    tcp->seq = 1;
+                    tcp->flags = TCP_SYN;
+                    tcp->window = getAdvertisedWindow(i);
+                    tcp->payloadLen = 0;
 
-                        packet.src = TOS_NODE_ID;
-                        packet.dest = sockets[i].dest.addr;
-                        packet.TTL = MAX_TTL;
-                        packet.seq = 0;
-                        packet.protocol = PROTOCOL_TCP;
-                        
-                        routeAndSend(packet, sockets[i].dest.addr);
-                    }
+                    packet.src = TOS_NODE_ID;
+                    packet.dest = sockets[i].dest.addr;
+                    packet.TTL = MAX_TTL;
+                    packet.seq = 0;
+                    packet.protocol = PROTOCOL_TCP;
+                    
+                    routeAndSend(packet, sockets[i].dest.addr);
+                }
+                
+                // Clean up TIME_WAIT sockets
+                if (sockets[i].state == TIME_WAIT) {
+                    dbg("transport", "TIME_WAIT expired, closing socket.\n");
+                    sockets[i].flag = 0;
+                    sockets[i].state = CLOSED;
                 }
             }
         }

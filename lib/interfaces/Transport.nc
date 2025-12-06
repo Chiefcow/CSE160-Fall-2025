@@ -8,7 +8,11 @@ interface Transport {
     command error_t listen(socket_t fd);
     command error_t connect(socket_t fd, socket_addr_t * addr);
     command error_t close(socket_t fd);
-    command error_t send(socket_t fd, uint8_t *buff, uint16_t bufflen);
+    
+    // Returns the number of bytes actually written to the buffer
+    // May be less than bufflen if buffer is full
+    command uint16_t send(socket_t fd, uint8_t *buff, uint16_t bufflen);
+    
     command error_t receive(pack* msg);
     
     // Signals to Application

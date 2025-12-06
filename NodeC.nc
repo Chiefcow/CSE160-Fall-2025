@@ -18,8 +18,6 @@ implementation {
     components Node;
     components new AMReceiverC(AM_PACK) as GeneralReceive;
 
-    
-
     Node -> MainC.Boot;
 
     Node.Receive -> GeneralReceive;
@@ -27,26 +25,31 @@ implementation {
     components ActiveMessageC;
     Node.AMControl -> ActiveMessageC;
 
-    //look here
+    // Command Handler
     components CommandHandlerC;
     Node.CommandHandler -> CommandHandlerC;
 
+    // Neighbor Discovery
     components NeighborDiscoveryC;
     Node.NeighborDiscovery -> NeighborDiscoveryC;
 
+    // Flooding
     components FloodingC;
     Node.Flooding -> FloodingC;
 
+    // Link State Routing
     components LinkStateC;
     Node.LinkState -> LinkStateC;
 
-    // Add SimpleSend for Node to send packets
+    // SimpleSend for Node to send packets
     components new SimpleSendC(AM_PACK);
     Node.Sender -> SimpleSendC;
-    // components NeighborDiscoveryC;
-    // Node.NeighborDiscovery -> SimpleSendC;
 
-    //Add TransportC
+    // Transport Layer
     components TransportC;
     Node.Transport -> TransportC;
+    
+    // Timer for client data sending
+    components new TimerMilliC() as ClientWriteTimerC;
+    Node.ClientWriteTimer -> ClientWriteTimerC;
 }
