@@ -5,7 +5,7 @@ def main():
     s = TestSim();
 
     # Before we do anything, lets simulate the network off.
-    s.runTime(1);
+    s.runTime(500);
 
     # Load the the layout of the network.
     s.loadTopo("tuna-melt.topo");

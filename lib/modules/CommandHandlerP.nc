@@ -69,12 +69,12 @@ implementation{
                 break;
 
             case CMD_TEST_CLIENT:
-                dbg(COMMAND_CHANNEL, "Command Type: Client\n");
+                dbg(COMMAND_CHANNEL, "Command Type: Test Client\n");
                 signal CommandHandler.setTestClient();
                 break;
 
             case CMD_TEST_SERVER:
-                dbg(COMMAND_CHANNEL, "Command Type: Client\n");
+                dbg(COMMAND_CHANNEL, "Command Type: Test Server\n");
                 signal CommandHandler.setTestServer();
                 break;
 
@@ -89,6 +89,7 @@ implementation{
             post processCommand();
         }
     }
+    
     event message_t* Receive.receive(message_t* raw_msg, void* payload, uint8_t len){
         if (! call Pool.empty()){
             call Queue.enqueue(raw_msg);

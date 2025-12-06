@@ -28,36 +28,77 @@ implementation {
     pending_conn_t pendingConns[MAX_NUM_OF_SOCKETS][MAX_PENDING];
     uint8_t pendingCount[MAX_NUM_OF_SOCKETS];
     
-    pending_packet_t retransmitQueues[MAX_NUM_OF_SOCKETS][MAX_RETRANSMIT_QUEUE];
+    // Enhanced retransmit queue entry
+    typedef struct {
+        pack packet;
+        uint32_t sentTime;
+        uint32_t timeout;
+        uint16_t seq;
+        uint8_t payloadLen;
+        uint8_t retryCount;  // NEW: Track retry attempts
+    } retransmit_entry_t;
+    
+    retransmit_entry_t retransmitQueues[MAX_NUM_OF_SOCKETS][MAX_RETRANSMIT_QUEUE];
     uint8_t retransmitCount[MAX_NUM_OF_SOCKETS];
     uint32_t currentTime = 0;
+    
+    #define MAX_RETRIES 10  // Maximum retransmission attempts
 
     // ========== HELPER FUNCTIONS ==========
 
     /**
-     * Calculate available space in receive buffer
+     * FIXED: Calculate available space in receive buffer with wrap-around handling
      */
     uint8_t getAdvertisedWindow(uint8_t fd) {
-        uint16_t used = sockets[fd].lastRcvd - sockets[fd].lastRead;
+        uint16_t used;
+        
+        // Handle wrap-around correctly
+        if (sockets[fd].lastRcvd >= sockets[fd].lastRead) {
+            // Normal case: no wrap-around
+            used = sockets[fd].lastRcvd - sockets[fd].lastRead;
+        } else {
+            // Wrap-around case
+            used = (65536 - sockets[fd].lastRead) + sockets[fd].lastRcvd;
+        }
+        
         if (used >= SOCKET_BUFFER_SIZE) return 0;
         return SOCKET_BUFFER_SIZE - used;
     }
 
     /**
-     * Check if sequence number has been acknowledged (handles wrap-around)
-     * Based on PDF Section: "Checking Acknowledgments"
+     * FIXED: Check if sequence number is NOT acknowledged (for retransmission)
+     * Based on PDF Section: "Checking Acknowledgments" (pages 2-3)
+     * Returns TRUE if packet needs retransmission
      */
-    bool isAcknowledged(uint16_t seq, uint16_t lastAck, uint16_t lastSent) {
+    bool isNotAcknowledged(uint16_t seq, uint16_t lastAck, uint16_t lastSent) {
         // Typical case: lastSent >= lastAck
         if (lastSent >= lastAck) {
-            // ACKed if: seq < lastAck OR seq > lastSent
-            return (seq < lastAck) || (seq > lastSent);
+            // NOT acknowledged if: seq is in the range [lastAck, lastSent)
+            return (seq >= lastAck) && (seq < lastSent);
         }
         // Wrap-around case: lastSent < lastAck
         else {
-            // ACKed if: seq is between lastAck and lastSent
-            return (seq >= lastAck) && (seq <= lastSent);
+            // NOT acknowledged if: seq < lastSent OR seq >= lastAck
+            return (seq < lastSent) || (seq >= lastAck);
         }
+    }
+
+    /**
+     * NEW: Update RTT estimate using exponential weighted moving average
+     */
+    void updateRTT(socket_t fd, uint32_t sampleRTT) {
+        if (sampleRTT == 0) return;
+        
+        // EWMA: RTT = (7/8)*oldRTT + (1/8)*sample
+        // This smooths out variations while adapting to changes
+        sockets[fd].RTT = ((7 * sockets[fd].RTT) + sampleRTT) / 8;
+        
+        // Keep RTT in reasonable bounds (50ms to 5000ms)
+        if (sockets[fd].RTT < 50) sockets[fd].RTT = 50;
+        if (sockets[fd].RTT > 5000) sockets[fd].RTT = 5000;
+        
+        dbg(TRANSPORT_CHANNEL, "RTT updated to %d ms (sample=%d)\n", 
+            sockets[fd].RTT, sampleRTT);
     }
 
     /**
@@ -84,7 +125,7 @@ implementation {
     }
 
     /**
-     * Add packet to retransmission queue
+     * FIXED: Add packet to retransmission queue with retry tracking
      */
     void addToRetransmitQueue(socket_t fd, pack* packet, uint16_t seq, uint8_t payloadLen) {
         if (retransmitCount[fd] >= MAX_RETRANSMIT_QUEUE) {
@@ -97,20 +138,24 @@ implementation {
         retransmitQueues[fd][retransmitCount[fd]].timeout = currentTime + (2 * sockets[fd].RTT);
         retransmitQueues[fd][retransmitCount[fd]].seq = seq;
         retransmitQueues[fd][retransmitCount[fd]].payloadLen = payloadLen;
+        retransmitQueues[fd][retransmitCount[fd]].retryCount = 0;  // NEW: Initialize retry count
         retransmitCount[fd]++;
 
-        dbg(TRANSPORT_CHANNEL, "Added seq %d to retransmit queue (count=%d)\n", 
-            seq, retransmitCount[fd]);
+        dbg(TRANSPORT_CHANNEL, "Added seq %d to retransmit queue (count=%d, timeout=%d)\n", 
+            seq, retransmitCount[fd], retransmitQueues[fd][retransmitCount[fd]-1].timeout);
     }
 
     /**
-     * Remove acknowledged packets from retransmit queue
+     * FIXED: Remove acknowledged packets from retransmit queue
+     * Also measure RTT for RTT estimation
      */
     void cleanRetransmitQueue(socket_t fd, uint16_t ackNum) {
         uint8_t i, j;
         uint8_t newCount;
         uint16_t pktSeq;
         uint16_t pktEnd;
+        uint32_t rttSample;
+        bool measuredRTT = FALSE;
         
         newCount = 0;
 
@@ -120,6 +165,13 @@ implementation {
 
             // If this packet is fully acknowledged, don't keep it
             if (pktEnd <= ackNum) {
+                // NEW: Measure RTT from first ACKed packet (if not retransmitted)
+                if (!measuredRTT && retransmitQueues[fd][i].retryCount == 0) {
+                    rttSample = currentTime - retransmitQueues[fd][i].sentTime;
+                    updateRTT(fd, rttSample);
+                    measuredRTT = TRUE;
+                }
+                
                 dbg(TRANSPORT_CHANNEL, "Removing acked packet seq %d from queue\n", pktSeq);
                 continue;
             }
@@ -173,19 +225,20 @@ implementation {
         packet.protocol = PROTOCOL_TCP;
         packet.TTL = MAX_TTL;
 
-        dbg(TRANSPORT_CHANNEL, "Sending ACK with ack=%d\n", tcp->ack);
+        dbg(TRANSPORT_CHANNEL, "Sending ACK with ack=%d window=%d\n", 
+            tcp->ack, tcp->window);
         routeAndSend(packet, sockets[fd].dest.addr);
     }
 
     /**
-     * Send data with flow control and sliding window
+     * FIXED: Send data with proper flow control and sliding window
      */
     void sendData(socket_t fd) {
         pack packet;
         tcp_pack* tcp;
         uint8_t payloadInd;
         uint16_t seqToSend;
-        uint8_t canSend;
+        uint16_t canSend;
         uint8_t maxPayload;
         uint16_t unsentBytes;
         uint16_t inFlightBytes;
@@ -201,10 +254,26 @@ implementation {
         // Calculate how much we can send based on:
         // 1. What's been written but not sent
         // 2. Peer's advertised window
-        unsentBytes = sockets[fd].lastWritten - sockets[fd].lastSent;
-        inFlightBytes = sockets[fd].lastSent - sockets[fd].lastAck;
         
-        canSend = sockets[fd].effectiveWindow - inFlightBytes;
+        // FIXED: Handle wrap-around in calculations
+        if (sockets[fd].lastWritten >= sockets[fd].lastSent) {
+            unsentBytes = sockets[fd].lastWritten - sockets[fd].lastSent;
+        } else {
+            unsentBytes = (65536 - sockets[fd].lastSent) + sockets[fd].lastWritten;
+        }
+        
+        if (sockets[fd].lastSent >= sockets[fd].lastAck) {
+            inFlightBytes = sockets[fd].lastSent - sockets[fd].lastAck;
+        } else {
+            inFlightBytes = (65536 - sockets[fd].lastAck) + sockets[fd].lastSent;
+        }
+        
+        // Calculate available window space
+        if (inFlightBytes >= sockets[fd].effectiveWindow) {
+            canSend = 0;
+        } else {
+            canSend = sockets[fd].effectiveWindow - inFlightBytes;
+        }
         
         if (canSend == 0 || unsentBytes == 0) {
             return;  // Window full or nothing to send
@@ -240,8 +309,8 @@ implementation {
         packet.protocol = PROTOCOL_TCP;
         packet.TTL = MAX_TTL;
         
-        dbg(TRANSPORT_CHANNEL, "Sending DATA seq=%d len=%d ack=%d\n", 
-            seqToSend, tcp->payloadLen, tcp->ack);
+        dbg(TRANSPORT_CHANNEL, "Sending DATA seq=%d len=%d ack=%d window=%d\n", 
+            seqToSend, tcp->payloadLen, tcp->ack, tcp->window);
         
         // Add to retransmit queue
         addToRetransmitQueue(fd, &packet, seqToSend, tcp->payloadLen);
@@ -249,13 +318,36 @@ implementation {
         routeAndSend(packet, sockets[fd].dest.addr);
     }
 
+    /**
+     * NEW: Enforce that control packets (SYN/ACK/FIN) carry no data
+     */
+    bool isValidControlPacket(tcp_pack* tcp) {
+        // Control packets should not carry payload data
+        if ((tcp->flags == TCP_SYN || 
+             tcp->flags == TCP_FIN || 
+             tcp->flags == TCP_ACK ||
+             tcp->flags == (TCP_SYN | TCP_ACK)) && 
+            tcp->payloadLen > 0) {
+            dbg(TRANSPORT_CHANNEL, "ERROR: Control packet (flags=%d) has payload data!\n", 
+                tcp->flags);
+            return FALSE;
+        }
+        return TRUE;
+    }
+
     // ========== TRANSPORT INTERFACE COMMANDS ==========
 
     command error_t Transport.start() {
-        uint8_t i;
+        uint8_t i, j;
         for (i = 0; i < MAX_NUM_OF_SOCKETS; i++) {
             sockets[i].flag = 0;
             retransmitCount[i] = 0;
+            pendingCount[i] = 0;
+            
+            // Initialize pending connections
+            for (j = 0; j < MAX_PENDING; j++) {
+                pendingConns[i][j].valid = FALSE;
+            }
         }
         call TransportTimer.startPeriodic(100);  // 100ms timer
         dbg(TRANSPORT_CHANNEL, "Transport started\n");
@@ -268,7 +360,7 @@ implementation {
             if (sockets[i].flag == 0) {
                 sockets[i].flag = 1;
                 sockets[i].state = CLOSED;
-                sockets[i].RTT = 200;  // 200ms default RTT
+                sockets[i].RTT = 200;  // 200ms initial RTT (will be updated)
                 sockets[i].lastWritten = 0;
                 sockets[i].lastAck = 0;
                 sockets[i].lastSent = 0;
@@ -303,7 +395,7 @@ implementation {
             pendingConns[fd][i].valid = FALSE;
         }
         
-        dbg(TRANSPORT_CHANNEL, "Socket %d listening\n", fd);
+        dbg(TRANSPORT_CHANNEL, "Socket %d listening on port %d\n", fd, sockets[fd].src);
         return SUCCESS;
     }
 
@@ -402,7 +494,7 @@ implementation {
             sockets[fd].dest.addr, sockets[fd].dest.port);
         routeAndSend(packet, sockets[fd].dest.addr);
         
-        sockets[fd].lastSent = 1;  
+        sockets[fd].lastSent = 1;  // SYN consumes 1 byte
         
         return SUCCESS;
     }
@@ -416,7 +508,8 @@ implementation {
         
         if (fd == 0 || fd >= MAX_NUM_OF_SOCKETS) return FAIL;
         if (sockets[fd].state != ESTABLISHED) {
-            dbg(TRANSPORT_CHANNEL, "Cannot send - socket not established\n");
+            dbg(TRANSPORT_CHANNEL, "Cannot send - socket not established (state=%d)\n", 
+                sockets[fd].state);
             return FAIL;
         }
 
@@ -514,7 +607,7 @@ implementation {
             packet.TTL = MAX_TTL;
 
             routeAndSend(packet, sockets[fd].dest.addr);
-            sockets[fd].lastSent++;  // FIN consumes 1 sequence number
+            sockets[fd].lastSent++;
         }
         
         return SUCCESS;
@@ -530,6 +623,11 @@ implementation {
         uint16_t idx;
         
         tcp = (tcp_pack*)msg->payload;
+        
+        // NEW: Validate control packets don't carry data
+        if (!isValidControlPacket(tcp)) {
+            return FAIL;
+        }
 
         dbg(TRANSPORT_CHANNEL, "Node %d received TCP from %d: flags=%d seq=%d ack=%d port %d->%d\n", 
             TOS_NODE_ID, msg->src, tcp->flags, tcp->seq, tcp->ack, tcp->srcPort, tcp->destPort);
@@ -548,8 +646,8 @@ implementation {
                         pendingConns[fd][i].initialSeq = tcp->seq;
                         pendingCount[fd]++;
                         
-                        dbg("Project3TGen", "Debug(%d): SYN queued from Node %d for Port %d (pending=%d)\n",
-                            TOS_NODE_ID, msg->src, tcp->destPort, pendingCount[fd]);
+                        dbg("Project3TGen", "Debug(%d): SYN Packet Arrived from Node %d for Port %d\n",
+                            TOS_NODE_ID, msg->src, tcp->destPort);
                         break;
                     }
                 }
@@ -635,7 +733,7 @@ implementation {
                             tcp->ack, sockets[fd].lastAck);
                         sockets[fd].lastAck = tcp->ack;
                         
-                        // Clean retransmit queue
+                        // Clean retransmit queue (this also measures RTT)
                         cleanRetransmitQueue(fd, tcp->ack);
                         
                         // Try to send more data
@@ -648,7 +746,8 @@ implementation {
                     sockets[fd].state = CLOSE_WAIT;
                     sockets[fd].nextExpected = tcp->seq + 1;  // FIN consumes 1
                     
-                    dbg(TRANSPORT_CHANNEL, "Received FIN, entering CLOSE_WAIT\n");
+                    dbg("Project3TGen", "Debug(%d): FIN Packet Arrived from Node %d\n",
+                        TOS_NODE_ID, msg->src);
                     
                     // Send ACK for FIN
                     sendAck(fd);
@@ -694,8 +793,13 @@ implementation {
 
     // ========== TIMER EVENT ==========
 
+    /**
+     * FIXED: Timer with exponential backoff and retry limits
+     */
     event void TransportTimer.fired() {
         uint8_t i, j;
+        uint8_t backoffMultiplier;
+        
         currentTime += 100;  // 100ms per tick
 
         // Check for retransmissions
@@ -704,15 +808,36 @@ implementation {
 
             for (j = 0; j < retransmitCount[i]; j++) {
                 if (currentTime >= retransmitQueues[i][j].timeout) {
+                    // Check retry limit
+                    if (retransmitQueues[i][j].retryCount >= MAX_RETRIES) {
+                        dbg(TRANSPORT_CHANNEL, 
+                            "Max retries exceeded for seq=%d, giving up\n",
+                            retransmitQueues[i][j].seq);
+                        
+                        // Close connection due to repeated failures
+                        sockets[i].state = CLOSED;
+                        sockets[i].flag = 0;
+                        retransmitCount[i] = 0;
+                        break;
+                    }
+                    
+                    // Exponential backoff: 2^retryCount
+                    backoffMultiplier = 1 << retransmitQueues[i][j].retryCount;
+                    if (backoffMultiplier > 16) backoffMultiplier = 16;  // Cap at 16x
+                    
                     dbg(TRANSPORT_CHANNEL, 
-                        "TIMEOUT! Retransmitting seq=%d\n", 
-                        retransmitQueues[i][j].seq);
+                        "TIMEOUT! Retransmitting seq=%d (retry #%d, backoff=%dx)\n", 
+                        retransmitQueues[i][j].seq,
+                        retransmitQueues[i][j].retryCount + 1,
+                        backoffMultiplier);
                     
                     // Retransmit the packet
                     routeAndSend(retransmitQueues[i][j].packet, sockets[i].dest.addr);
                     
-                    // Update timeout (exponential backoff)
-                    retransmitQueues[i][j].timeout = currentTime + (2 * sockets[i].RTT);
+                    // Update timeout with exponential backoff
+                    retransmitQueues[i][j].timeout = currentTime + 
+                        (2 * sockets[i].RTT * backoffMultiplier);
+                    retransmitQueues[i][j].retryCount++;
                 }
             }
         }

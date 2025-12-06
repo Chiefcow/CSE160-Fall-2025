@@ -97,19 +97,38 @@ implementation{
    }
 
    /**
+    *  cmdClientClose - gracefully close client connection
+    */
+   void cmdClientClose(uint16_t dest, uint8_t srcPort, uint8_t destPort){
+      uint8_t i;
+      
+      // Find the socket matching the 4-tuple
+      for (i = 1; i < 10; i++) {
+         // Check if socket is in use and matches the connection
+         if (clientFd == i) {
+            dbg("Project3TGen", "Closing client connection to %d:%d from port %d\n",
+                dest, destPort, srcPort);
+            
+            call Transport.close(clientFd);
+            isClientRunning = FALSE;
+            call ClientWriteTimer.stop();
+            return;
+         }
+      }
+      
+      dbg("Project3TGen", "No matching connection found for %d:%d\n", dest, destPort);
+   }
+
+   /**
     * CommandHandler events - MUST MATCH INTERFACE EXACTLY
     */
    event void CommandHandler.setTestServer() {
       cmdTestServer(80);  
    }
 
-event void CommandHandler.setTestClient() {
-   cmdTestClient(1, 41, 80, 100); 
-}
-
-   // event void CommandHandler.setTestClient(uint16_t dest, uint8_t srcPort, uint8_t destPort, uint16_t transfer) {
-   //    cmdTestClient(dest, srcPort, destPort, transfer);
-   // }
+   event void CommandHandler.setTestClient() {
+      cmdTestClient(1, 41, 80, 100); 
+   }
 
    event void CommandHandler.setAppServer(){}
    event void CommandHandler.setAppClient(){}
