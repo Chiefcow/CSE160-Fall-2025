@@ -14,7 +14,7 @@ char FLOODING_CHANNEL[]="flooding";
 char ROUTING_CHANNEL[]="routing";
 
 // Project 3
-char TRANSPORT_CHANNEL[]="transport";
+char TRANSPORT_CHANNEL[]="Project3TGen";
 
 // Personal Debuggin Channels for some of the additional models implemented.
 char HASHMAP_CHANNEL[]="hashmap";
