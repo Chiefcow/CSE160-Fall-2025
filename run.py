@@ -6,7 +6,7 @@ def main():
     s = TestSim()
     
     # Boot simulator with 1 time unit
-    s.runTime(1)
+    s.runTime(500)
     
     # Load network topology
     s.loadTopo("tuna-melt.topo")  # or "long_line.topo"
@@ -18,20 +18,20 @@ def main():
     s.bootAll()
     
     # Add debug channels - USE "Project3TGen" for grading!
-    s.addChannel("Project3TGen")   # ← REQUIRED for your project
+    s.addChannel("Project3TGen")   # 
     s.addChannel("general")
-    s.addChannel("routing")
+    #s.addChannel("routing")
     
     # CRITICAL: Wait for routing to stabilize
     print("\n=== Waiting for routing to stabilize ===")
     s.runTime(500)
     
     # Verify routes exist
-    print("\n=== Routing Tables ===")
-    s.routeDMP(1)
-    s.runTime(10)
-    s.routeDMP(4)
-    s.runTime(10)
+    # print("\n=== Routing Tables ===")
+    # s.routeDMP(1)
+    # s.runTime(10)
+    # s.routeDMP(4)
+    # s.runTime(10)
     
     # Start server on Node 1, Port 80
     print("\n=== Starting Server ===")

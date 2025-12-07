@@ -11,14 +11,16 @@
 //Command ID Number
 enum{
 	CMD_PING = 0,
-	CMD_NEIGHBOR_DUMP=1,
-	CMD_LINKSTATE_DUMP=2,
-	CMD_ROUTETABLE_DUMP=3,
-	CMD_TEST_CLIENT=4,
-	CMD_TEST_SERVER=5,
-	CMD_KILL=6,
-	CMD_CLIENT_CLOSE=7,     // NEW: Command to close client connection
-	CMD_ERROR=9
+	CMD_NEIGHBOR_DUMP = 1,
+	CMD_LINKSTATE_DUMP = 2,
+	CMD_ROUTETABLE_DUMP = 3,
+	CMD_TEST_CLIENT = 4,
+	CMD_TEST_SERVER = 5,
+	CMD_KILL = 6,
+	CMD_CLIENT_CLOSE = 7,    // NEW: Command to gracefully close client connection
+	CMD_ERROR = 9,
+	CMD_ROUTE = 10,
+	CMD_FLOOD = 31
 };
 
 enum{

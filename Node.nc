@@ -21,8 +21,8 @@ module Node{
    uses interface Flooding as Flooding;
    uses interface LinkState as LinkState;
    uses interface Transport;
-   uses interface Timer<TMilli> as AcceptTimer;      // Server accept timer
-   uses interface Timer<TMilli> as ClientWriteTimer; // Client write timer
+   uses interface Timer<TMilli> as AcceptTimer;
+   uses interface Timer<TMilli> as ClientWriteTimer;
 }
 
 implementation{
@@ -42,7 +42,7 @@ implementation{
    bool isClientRunning = FALSE;
    
    // Prototypes
-   void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length);
+   void makePack(pack *Package, uint8_t src, uint8_t dest, uint8_t protocol, uint8_t *payload, uint8_t length);
 
    /**
     * cmdTestServer - server implementation
@@ -66,7 +66,7 @@ implementation{
       
       isServerRunning = TRUE;
       
-      dbg("Project3TGen", "Server started on node %d, port %d\n", TOS_NODE_ID, port);
+      dbg("Project3TGen", "Debug(%d): Server started on port %d\n", TOS_NODE_ID, port);
       
       call AcceptTimer.startPeriodic(1000);
    }
@@ -92,35 +92,26 @@ implementation{
       
       isClientRunning = TRUE;
       
-      dbg("Project3TGen", "Client connecting to node %d, port %d\n", dest, destPort);
+      dbg("Project3TGen", "Debug(%d): Client connecting to node %d, port %d\n", 
+          TOS_NODE_ID, dest, destPort);
+      
       call Transport.connect(clientFd, &dst);
    }
 
    /**
-    *  cmdClientClose - gracefully close client connection
+    * cmdClientClose - gracefully close client connection
     */
    void cmdClientClose(uint16_t dest, uint8_t srcPort, uint8_t destPort){
-      uint8_t i;
-      
-      // Find the socket matching the 4-tuple
-      for (i = 1; i < 10; i++) {
-         // Check if socket is in use and matches the connection
-         if (clientFd == i) {
-            dbg("Project3TGen", "Closing client connection to %d:%d from port %d\n",
-                dest, destPort, srcPort);
-            
-            call Transport.close(clientFd);
-            isClientRunning = FALSE;
-            call ClientWriteTimer.stop();
-            return;
-         }
+      if (clientFd != 0) {
+         dbg("Project3TGen", "Debug(%d): Closing client connection\n", TOS_NODE_ID);
+         call Transport.close(clientFd);
+         isClientRunning = FALSE;
+         call ClientWriteTimer.stop();
       }
-      
-      dbg("Project3TGen", "No matching connection found for %d:%d\n", dest, destPort);
    }
 
    /**
-    * CommandHandler events - MUST MATCH INTERFACE EXACTLY
+    * CommandHandler events
     */
    event void CommandHandler.setTestServer() {
       cmdTestServer(80);  
@@ -157,7 +148,8 @@ implementation{
       // Try to accept new connections
       newFd = call Transport.accept(serverFd);
       if (newFd != 0) {
-         dbg("Project3TGen", "Debug(%d): Connection accepted on socket %d\n", TOS_NODE_ID, newFd);
+         dbg("Project3TGen", "Debug(%d): Connection accepted from Node %d on socket %d\n", 
+             TOS_NODE_ID, newFd);
          if (numAcceptedSockets < 10) {
             acceptedSockets[numAcceptedSockets] = newFd;
             numAcceptedSockets++;
@@ -247,23 +239,28 @@ implementation{
       
       if (len != sizeof(pack)) return msg;
 
+      // Handle neighbor discovery packets
       if (myMsg->protocol == PROTOCOL_NEIGHBOR_DISCOVERY) {
          call NeighborDiscovery.handleNeighbor(myMsg);
          return msg;
       }
+      
+      // Handle link state packets
       if (myMsg->protocol == PROTOCOL_LINKEDLIST) {
          call LinkState.handleLSP(myMsg);
          return msg;
       }
 
+      // Handle packets destined for this node
       if (myMsg->dest == TOS_NODE_ID) {
          if (myMsg->protocol == PROTOCOL_TCP){
             tcp = (tcp_pack*)myMsg->payload;
             
+            // Debug output for TCP packets
             if (tcp->flags == TCP_SYN) {
                dbg("Project3TGen", "Debug(%d): SYN Packet Arrived from Node %d for Port %d\n",
                    TOS_NODE_ID, myMsg->src, tcp->destPort);
-            } else if (tcp->flags == (TCP_SYN | TCP_ACK)) {
+            } else if (tcp->flags == TCP_SYN_ACK) {
                dbg("Project3TGen", "Debug(%d): SYN+ACK Packet Arrived from Node %d\n",
                    TOS_NODE_ID, myMsg->src);
             } else if (tcp->flags == TCP_FIN) {
@@ -277,12 +274,14 @@ implementation{
          }
          return msg;
       } else {
+         // Forward packet using routing
          nextHop = call LinkState.getNextHop(myMsg->dest);
          
-         if (nextHop != AM_BROADCAST_ADDR) {
+         if (nextHop != 255) {  // 255 = AM_BROADCAST_ADDR or no route
             dbg("routing", "Forwarding packet to %d via %d\n", myMsg->dest, nextHop);
             call Sender.send(*myMsg, nextHop);
          } else {
+            // No route found, try flooding
             call Flooding.handle_flooding(myMsg);
          }
       }
@@ -291,8 +290,8 @@ implementation{
 
    event void CommandHandler.ping(uint16_t destination, uint8_t *payload){
       dbg("general", "PING EVENT \n");
-      makePack(&sendPackage, TOS_NODE_ID, destination, 5, 0, seqNo++, payload, PACKET_MAX_PAYLOAD_SIZE);
-      call Sender.send(sendPackage, AM_BROADCAST_ADDR);
+      makePack(&sendPackage, TOS_NODE_ID, destination, PROTOCOL_PING, payload, PACKET_MAX_PAYLOAD_SIZE);
+      call Sender.send(sendPackage, 255);  // Broadcast
    }
 
    event void CommandHandler.printNeighbors(){
@@ -300,18 +299,15 @@ implementation{
    }
 
    event void CommandHandler.printRouteTable(){
-      // Just call dbg - the actual table is managed by LinkState
-      dbg("general", "Route table requested\n");
+      call LinkState.printRoutingTable();
    }
 
    event void CommandHandler.printLinkState(){}
    event void CommandHandler.printDistanceVector(){}
 
-   void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t protocol, uint16_t seq, uint8_t* payload, uint8_t length){
+   void makePack(pack *Package, uint8_t src, uint8_t dest, uint8_t protocol, uint8_t* payload, uint8_t length){
       Package->src = src;
       Package->dest = dest;
-      Package->TTL = TTL;
-      Package->seq = seq;
       Package->protocol = protocol;
       memcpy(Package->payload, payload, length);
    }
