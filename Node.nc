@@ -5,6 +5,7 @@
 #include "includes/channels.h"
 #include "includes/linkstate.h"
 #include "includes/socket.h"
+#include "includes/chat.h"
 
 module Node{
    uses interface Boot;
@@ -17,9 +18,11 @@ module Node{
    uses interface LinkState as LinkState;
    uses interface SimpleSend as Sender;
    uses interface Transport;
+   uses interface Chat;
    
    // Timer for sending data in chunks
    uses interface Timer<TMilli> as ClientWriteTimer;
+   uses interface Timer<TMilli> as ChatMsgTimer;
 }
 
 implementation{
@@ -28,10 +31,14 @@ implementation{
    socket_t serverFd;
    
    // Client transfer state
-   uint16_t transfer_amount = 0;      // Total bytes to transfer
-   uint16_t bytes_sent = 0;           // Bytes written to transport so far
-   uint8_t dataBuffer[256];           // Buffer holding data to send (support up to 256 bytes)
+   uint16_t transfer_amount = 0;
+   uint16_t bytes_sent = 0;
+   uint8_t dataBuffer[256];
    bool transfer_in_progress = FALSE;
+   
+   // Chat message queue for testing
+   char pendingMsg[32];
+   bool hasPendingMsg = FALSE;
    
    // Prototypes
    void makePack(pack *Package, uint16_t src, uint16_t dest, uint16_t TTL, uint16_t Protocol, uint16_t seq, uint8_t *payload, uint8_t length);
@@ -57,9 +64,8 @@ implementation{
       bytes_sent = 0;
       transfer_in_progress = FALSE;
 
-      // Pre-generate all the data (1, 2, 3, 4, ...)
       for(i = 0; i < transfer_amount && i < 256; i++){
-          dataBuffer[i] = (i + 1) & 0xFF;  // Wrap around for values > 255
+          dataBuffer[i] = (i + 1) & 0xFF;
       }
 
       call Transport.start();
@@ -84,21 +90,61 @@ implementation{
    }
 
    event void CommandHandler.setTestClient() {
-      cmdTestClient(1, 41, 80, 100);
+      cmdTestClient(1, 41, 80, 300);
    }
 
-   event void CommandHandler.setAppServer(){}
-   event void CommandHandler.setAppClient(){}
+   // Project 4 - Chat Commands
+   event void CommandHandler.setAppServer(){
+      dbg("transport", "Starting Chat Server on node %d\n", TOS_NODE_ID);
+      call Chat.startServer();
+   }
+   
+   event void CommandHandler.setAppClient(){
+      // Default client setup - this will be overridden by hello command
+      dbg("transport", "setAppClient called - use hello command instead\n");
+   }
+   
+   event void CommandHandler.hello(uint8_t clientPort, char* username) {
+      dbg("transport", "Hello command: user=%s, port=%d\n", username, clientPort);
+      call Chat.startClient(username, clientPort);
+   }
+   
+   event void CommandHandler.broadcastMsg(char* message) {
+      dbg("transport", "Broadcasting message: %s\n", message);
+      call Chat.sendMessage(message);
+   }
+   
+   event void CommandHandler.whisper(char* username, char* message) {
+      dbg("transport", "Whisper to %s: %s\n", username, message);
+      call Chat.sendWhisper(username, message);
+   }
+   
+   event void CommandHandler.listUsers() {
+      dbg("transport", "Requesting user list\n");
+      call Chat.requestUserList();
+   }
 
-   // Called when connection is established
+   // Chat events
+   event void Chat.connected() {
+      dbg("transport", "Chat: Connected to server!\n");
+   }
+   
+   event void Chat.messageReceived(char* from, char* message) {
+      dbg("transport", "Chat: [%s]: %s\n", from, message);
+   }
+   
+   event void Chat.userListReceived(char* userList) {
+      dbg("transport", "Chat: Online users: %s\n", userList);
+   }
+
+   // Called when connection is established (for test client)
    event void Transport.connectDone(socket_t fd){
       dbg("transport", "client connected. Sending %d bytes...\n", transfer_amount);
       
       transfer_in_progress = TRUE;
       bytes_sent = 0;
       
-      // Start the write timer - will fire immediately and then periodically
-      call ClientWriteTimer.startPeriodic(100);  // Try every 100ms
+      call ClientWriteTimer.startPeriodic(100);
    }
    
    // Timer event - periodically try to send more data
@@ -111,20 +157,15 @@ implementation{
          return;
       }
       
-      // Check if we have more data to send
       if (bytes_sent >= transfer_amount) {
-         // All data has been written to the transport layer
-         // The transport layer will close when all data is ACKed
          dbg("transport", "All %d bytes written to transport. Waiting for ACKs...\n", transfer_amount);
          transfer_in_progress = FALSE;
          call ClientWriteTimer.stop();
          return;
       }
       
-      // Calculate how many bytes to try to send this time
       bytesToSend = transfer_amount - bytes_sent;
       
-      // Try to write data starting from where we left off
       bytesWritten = call Transport.send(clientFd, &dataBuffer[bytes_sent], bytesToSend);
       
       if (bytesWritten > 0) {
@@ -133,17 +174,24 @@ implementation{
              bytesWritten, bytes_sent, transfer_amount);
       }
       
-      // If we've sent everything, stop the timer
       if (bytes_sent >= transfer_amount) {
          dbg("transport", "All %d bytes written to transport. Waiting for ACKs...\n", transfer_amount);
          transfer_in_progress = FALSE;
          call ClientWriteTimer.stop();
       }
    }
+   
+   event void ChatMsgTimer.fired() {
+      // Not currently used
+   }
 
    event error_t Transport.accept(socket_t fd) {
       dbg("transport", "server Accepted Connection. \n");
       return SUCCESS;
+   }
+   
+   event void Transport.dataReceived(socket_t fd) {
+      // Data handling is done in Chat module
    }
 
    event void Boot.booted(){

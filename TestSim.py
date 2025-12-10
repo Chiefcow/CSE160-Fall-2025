@@ -18,6 +18,13 @@ class TestSim:
     CMD_TEST_CLIENT = 4
     CMD_TEST_SERVER = 5
 
+    #Project 4 -chat commands 
+
+    CMD_HELLO = 10
+    CMD_MSG = 11
+    CMD_WHISPER = 12
+    CMD_LISTUSR = 13
+
     # CHANNELS - see includes/channels.h
     COMMAND_CHANNEL="command";
     GENERAL_CHANNEL="general";
@@ -80,6 +87,48 @@ class TestSim:
               " : " + str(destPort) + " transferring " + str(transfer)
         # Arguments: (ClientNodeID, DestNodeID, SrcPort, DestPort, TransferAmount)
         self.cmdTestClient(address, dest, srcPort, destPort, transfer)
+
+    # ==================== Project 4 - Chat Commands ====================
+    
+    def chatServer(self, address):
+        """Start the chat server on the specified node (should be node 1, port 41)"""
+        print "Starting Chat Server on Node " + str(address)
+        # Use CMD_TEST_SERVER with port 41 for chat
+        self.sendCMD(self.CMD_TEST_SERVER, address, chr(41))
+    
+    def chatHello(self, address, username, clientPort):
+        """Connect a client to the chat server
+        Format: hello [username] [clientport]
+        """
+        print "Node " + str(address) + " connecting as '" + username + "' on port " + str(clientPort)
+        # Payload format: [clientPort][username...]
+        payload = chr(clientPort) + username
+        self.sendCMD(self.CMD_HELLO, address, payload)
+    
+    def chatMsg(self, address, message):
+        """Send a broadcast message from a client
+        Format: msg [message]
+        """
+        print "Node " + str(address) + " broadcasting: " + message
+        self.sendCMD(self.CMD_MSG, address, message)
+    
+    def chatWhisper(self, address, toUsername, message):
+        """Send a private message to a specific user
+        Format: whisper [username] [message]
+        """
+        print "Node " + str(address) + " whispering to " + toUsername + ": " + message
+        # Payload format: [usernameLen][username][message]
+        payload = chr(len(toUsername)) + toUsername + message
+        self.sendCMD(self.CMD_WHISPER, address, payload)
+    
+    def chatListUsers(self, address):
+        """Request list of connected users
+        Format: listusr
+        """
+        print "Node " + str(address) + " requesting user list"
+        self.sendCMD(self.CMD_LISTUSR, address, "")
+    
+    # ==================== End Project 4 Commands ====================
     
     
 

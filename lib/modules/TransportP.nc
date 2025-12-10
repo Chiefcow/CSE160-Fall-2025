@@ -16,22 +16,20 @@ implementation {
     socket_store_t sockets[MAX_NUM_OF_SOCKETS];
     
     // Track transfer progress for each socket
-    uint16_t totalToSend[MAX_NUM_OF_SOCKETS];    // Total bytes application wants to send
-    uint16_t totalWritten[MAX_NUM_OF_SOCKETS];   // Total bytes written to buffer so far
+    uint16_t totalToSend[MAX_NUM_OF_SOCKETS];
+    uint16_t totalWritten[MAX_NUM_OF_SOCKETS];
     bool transferComplete[MAX_NUM_OF_SOCKETS];
 
     // Calculate available space in send buffer
     uint8_t getSendBufferSpace(uint8_t fd) {
         uint16_t inFlight;
         
-        // Data in flight = lastWritten - lastAck
         if (sockets[fd].lastWritten >= sockets[fd].lastAck) {
             inFlight = sockets[fd].lastWritten - sockets[fd].lastAck;
         } else {
             inFlight = 0;
         }
         
-        // Leave 1 slot to distinguish full from empty
         if (inFlight >= SOCKET_BUFFER_SIZE - 1) {
             return 0;
         }
@@ -76,7 +74,7 @@ implementation {
         call Sender.send(packet, nextHop);
     }
 
-    void handleInboundData(socket_t fd, tcp_pack* tcp) {
+    void handleInboundData(socket_t fd, tcp_pack* tcp, uint16_t srcAddr) {
         pack reply;
         tcp_pack* replyTcp;
         uint8_t i;
@@ -84,7 +82,7 @@ implementation {
         if (tcp->seq == sockets[fd].nextExpected) {
             dbg("transport", "Data Received Seq: %d Len: %d\n", tcp->seq, tcp->payloadLen);
             
-            for(i=0; i<tcp->payloadLen; i++) {
+            for(i = 0; i < tcp->payloadLen; i++) {
                 uint16_t idx = (sockets[fd].lastRcvd + 1) % SOCKET_BUFFER_SIZE;
                 sockets[fd].rcvdBuff[idx] = tcp->payload[i];
                 sockets[fd].lastRcvd++;
@@ -92,12 +90,15 @@ implementation {
             sockets[fd].nextExpected = tcp->seq + tcp->payloadLen; 
 
             dbg("transport", "Reading Data: ");
-            for(i=0; i<tcp->payloadLen; i++) {
-                dbg_clear("transport", "%d, ", tcp->payload[i]); 
+            for(i = 0; i < tcp->payloadLen; i++) {
+                dbg_clear("transport", "%c", tcp->payload[i]); 
             }
             dbg_clear("transport", "\n");
+            
+            // Signal that data was received
+            signal Transport.dataReceived(fd);
         } else {
-            //dbg("transport", "Out-of-order DATA Seq: %d Expected: %d\n", tcp->seq, sockets[fd].nextExpected);
+            dbg("transport", "Out-of-order DATA Seq: %d Expected: %d\n", tcp->seq, sockets[fd].nextExpected);
         }
 
         // Always send ACK
@@ -121,7 +122,7 @@ implementation {
 
     command error_t Transport.start() {
         uint8_t i;
-        for(i=0; i<MAX_NUM_OF_SOCKETS; i++) {
+        for(i = 0; i < MAX_NUM_OF_SOCKETS; i++) {
             sockets[i].flag = 0;
             totalToSend[i] = 0;
             totalWritten[i] = 0;
@@ -137,7 +138,7 @@ implementation {
             if (sockets[i].flag == 0) {
                 sockets[i].flag = 1;
                 sockets[i].state = CLOSED;
-                sockets[i].RTT = 100; //RTT IS FIXED at 100 ms because 
+                sockets[i].RTT = 100;
                 sockets[i].lastWritten = 0;
                 sockets[i].lastAck = 0;
                 sockets[i].lastSent = 0;
@@ -194,7 +195,6 @@ implementation {
 
         dbg("transport", "Sending SYN to %d port %d\n", sockets[fd].dest.addr, sockets[fd].dest.port);
         
-        // SYN consumes sequence 1
         sockets[fd].lastSent++;
         sockets[fd].lastWritten++;
         
@@ -210,7 +210,6 @@ implementation {
 
         if(sockets[fd].state != ESTABLISHED) return;
 
-        // Send data if we have unsent data in the buffer
         while(sockets[fd].lastWritten > sockets[fd].lastSent) {
             uint8_t maxPayload = TCP_MAX_PAYLOAD_SIZE; 
             
@@ -244,7 +243,6 @@ implementation {
         }
     }
 
-    // Returns number of bytes actually written to buffer
     command uint16_t Transport.send(socket_t fd, uint8_t *buff, uint16_t bufflen) {
         uint16_t i;
         uint16_t bytesWritten = 0;
@@ -253,12 +251,10 @@ implementation {
         if (fd == 0 || fd >= MAX_NUM_OF_SOCKETS) return 0;
         if (sockets[fd].state != ESTABLISHED) return 0;
 
-        // Set the total if this is a new transfer
         if (totalToSend[fd] == 0) {
             totalToSend[fd] = bufflen;
             totalWritten[fd] = 0;
             transferComplete[fd] = FALSE;
-            dbg("transport", "Starting transfer of %d bytes\n", bufflen);
         }
 
         availableSpace = getSendBufferSpace(fd);
@@ -270,12 +266,45 @@ implementation {
         }
         
         totalWritten[fd] += bytesWritten;
-        
-        dbg("transport", "Wrote %d bytes to buffer (total: %d/%d)\n", 
-            bytesWritten, totalWritten[fd], totalToSend[fd]);
 
         sendData(fd);
         return bytesWritten;
+    }
+    
+    // Read data from receive buffer
+    command uint16_t Transport.read(socket_t fd, uint8_t *buff, uint16_t bufflen) {
+        uint16_t bytesRead = 0;
+        uint16_t available;
+        
+        if (fd == 0 || fd >= MAX_NUM_OF_SOCKETS) return 0;
+        if (sockets[fd].flag == 0) return 0;
+        
+        // Calculate available data
+        if (sockets[fd].lastRcvd >= sockets[fd].lastRead) {
+            available = sockets[fd].lastRcvd - sockets[fd].lastRead;
+        } else {
+            available = 0;
+        }
+        
+        // Read up to bufflen bytes
+        while(bytesRead < bufflen && sockets[fd].lastRead < sockets[fd].lastRcvd) {
+            sockets[fd].lastRead++;
+            buff[bytesRead] = sockets[fd].rcvdBuff[sockets[fd].lastRead % SOCKET_BUFFER_SIZE];
+            bytesRead++;
+        }
+        
+        return bytesRead;
+    }
+    
+    // Get the source address of a connected socket (for server)
+    command uint16_t Transport.getSocketSrcAddr(socket_t fd) {
+        if (fd == 0 || fd >= MAX_NUM_OF_SOCKETS) return 0;
+        return sockets[fd].dest.addr;
+    }
+    
+    command uint8_t Transport.getSocketSrcPort(socket_t fd) {
+        if (fd == 0 || fd >= MAX_NUM_OF_SOCKETS) return 0;
+        return sockets[fd].dest.port;
     }
 
     command error_t Transport.close(socket_t fd) {
@@ -317,7 +346,7 @@ implementation {
         if (fd != 0 && sockets[fd].state == LISTEN && tcp->flags == TCP_SYN) {
             uint8_t checkFd = 0;
             uint8_t k;
-            for(k=1; k<MAX_NUM_OF_SOCKETS; k++) {
+            for(k = 1; k < MAX_NUM_OF_SOCKETS; k++) {
                 if(sockets[k].flag && sockets[k].dest.addr == msg->src && 
                    sockets[k].dest.port == tcp->srcPort && sockets[k].src == tcp->destPort) {
                     checkFd = k;
@@ -420,13 +449,13 @@ implementation {
                     sockets[fd].state = ESTABLISHED;
                     sockets[fd].lastAck = (sockets[fd].nextExpected > 0) ? sockets[fd].nextExpected - 1 : 0;
                     dbg("transport", "Server Established via DATA.\n");
-                    handleInboundData(fd, tcp);
+                    handleInboundData(fd, tcp, msg->src);
                 }
                 break;
 
             case ESTABLISHED:
                 if (tcp->flags == TCP_DATA) {
-                    handleInboundData(fd, tcp);
+                    handleInboundData(fd, tcp, msg->src);
                 }
 
                 if (tcp->flags == TCP_FIN) {
@@ -456,22 +485,7 @@ implementation {
                 if (tcp->flags == TCP_ACK) {
                     if(tcp->ack > sockets[fd].lastAck) {
                         sockets[fd].lastAck = (tcp->ack > 0) ? tcp->ack - 1 : 0;
-                        
-                        dbg("transport", "ACK received: %d (lastAck now %d, lastWritten %d)\n", 
-                            tcp->ack, sockets[fd].lastAck, sockets[fd].lastWritten);
-                        
-                        // Check if ALL data has been acknowledged
-                        if(totalToSend[fd] > 0 && 
-                           totalWritten[fd] >= totalToSend[fd] &&
-                           sockets[fd].lastAck >= sockets[fd].lastWritten && 
-                           !transferComplete[fd]) {
-                            transferComplete[fd] = TRUE;
-                            dbg("transport", "Transfer Complete! All %d bytes acknowledged.\n", totalToSend[fd]);
-                            call Transport.close(fd);
-                        } else {
-                            // Try to send more data
-                            sendData(fd);
-                        }
+                        sendData(fd);
                     }
                 }
                 break;
@@ -479,7 +493,6 @@ implementation {
             case FIN_WAIT_1:
                 if (tcp->flags == TCP_ACK) {
                     sockets[fd].state = FIN_WAIT_2;
-                    dbg("transport", "FIN_WAIT_1 -> FIN_WAIT_2\n");
                 }
                 if (tcp->flags == TCP_FIN) {
                     sockets[fd].state = TIME_WAIT;
@@ -500,7 +513,6 @@ implementation {
                     reply.seq = 0;
                     
                     routeAndSend(reply, reply.dest);
-                    dbg("transport", "Received FIN in FIN_WAIT_1, sent ACK. TIME_WAIT\n");
                 }
                 break;
                 
@@ -524,7 +536,6 @@ implementation {
                     reply.seq = 0;
                     
                     routeAndSend(reply, reply.dest);
-                    dbg("transport", "Received FIN in FIN_WAIT_2, sent ACK. Connection CLOSED.\n");
                     
                     sockets[fd].flag = 0;
                     sockets[fd].state = CLOSED;
@@ -536,7 +547,6 @@ implementation {
                 
             case LAST_ACK:
                 if (tcp->flags == TCP_ACK) {
-                    dbg("transport", "Received final ACK. Connection CLOSED.\n");
                     sockets[fd].flag = 0;
                     sockets[fd].state = CLOSED;
                 }
@@ -568,16 +578,14 @@ implementation {
         }
         return SUCCESS;
     }
-    //
+
     event void TransportTimer.fired() {
         uint8_t i;
-        for(i=1; i<MAX_NUM_OF_SOCKETS; i++) {
+        for(i = 1; i < MAX_NUM_OF_SOCKETS; i++) {
             if(sockets[i].flag) {
                 // Retransmit unacked data
                 if (sockets[i].state == ESTABLISHED && 
-                    sockets[i].lastSent > sockets[i].lastAck + 1 &&
-                    !transferComplete[i]) {
-                    dbg("transport", "Timeout! Retransmitting from %d\n", sockets[i].lastAck);
+                    sockets[i].lastSent > sockets[i].lastAck) {
                     sockets[i].lastSent = sockets[i].lastAck;
                     sendData(i);
                 }
@@ -586,8 +594,6 @@ implementation {
                 if (sockets[i].state == SYN_SENT) {
                     pack packet;
                     tcp_pack* tcp = (tcp_pack*)packet.payload;
-                    
-                    dbg("transport", "Handshake Timeout! Retrying SYN...\n");
                     
                     tcp->srcPort = sockets[i].src;
                     tcp->destPort = sockets[i].dest.port;
@@ -607,11 +613,13 @@ implementation {
                 
                 // Clean up TIME_WAIT sockets
                 if (sockets[i].state == TIME_WAIT) {
-                    dbg("transport", "TIME_WAIT expired, closing socket.\n");
                     sockets[i].flag = 0;
                     sockets[i].state = CLOSED;
                 }
             }
         }
     }
+    
+    // Default event handler for dataReceived
+    default event void Transport.dataReceived(socket_t fd) {}
 }

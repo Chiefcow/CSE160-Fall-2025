@@ -48,8 +48,16 @@ implementation {
     // Transport Layer
     components TransportC;
     Node.Transport -> TransportC;
-    
+
+    //Chat Module (project 4)
+    components ChatC;
+    Node.Chat -> ChatC;
+
     // Timer for client data sending
     components new TimerMilliC() as ClientWriteTimerC;
     Node.ClientWriteTimer -> ClientWriteTimerC;
+
+    //Timer for chat messages
+    components new TimerMilliC() as ChatMsgTimerC;
+    Node.ChatMsgTimer -> ChatMsgTimerC;
 }

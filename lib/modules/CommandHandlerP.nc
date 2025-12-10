@@ -69,13 +69,71 @@ implementation{
                 break;
 
             case CMD_TEST_CLIENT:
-                dbg(COMMAND_CHANNEL, "Command Type: Client\n");
+                dbg(COMMAND_CHANNEL, "Command Type: Test Client\n");
                 signal CommandHandler.setTestClient();
                 break;
 
             case CMD_TEST_SERVER:
-                dbg(COMMAND_CHANNEL, "Command Type: Server\n");
+                dbg(COMMAND_CHANNEL, "Command Type: Test Server\n");
                 signal CommandHandler.setTestServer();
+                break;
+            
+            // Project 4 - Chat Commands
+            case CMD_HELLO:
+                {
+                    // Payload format: [clientPort][username...]
+                    uint8_t clientPort = buff[0];
+                    char username[16];
+                    uint8_t i;
+                    for(i = 0; i < 15 && buff[i+1] != '\0'; i++) {
+                        username[i] = buff[i+1];
+                    }
+                    username[i] = '\0';
+                    dbg(COMMAND_CHANNEL, "Command Type: Hello - User: %s, Port: %d\n", username, clientPort);
+                    signal CommandHandler.hello(clientPort, username);
+                }
+                break;
+                
+            case CMD_MSG:
+                {
+                    // Payload format: [message...]
+                    char message[24];
+                    uint8_t i;
+                    for(i = 0; i < 23 && buff[i] != '\0'; i++) {
+                        message[i] = buff[i];
+                    }
+                    message[i] = '\0';
+                    dbg(COMMAND_CHANNEL, "Command Type: Broadcast Message: %s\n", message);
+                    signal CommandHandler.broadcastMsg(message);
+                }
+                break;
+                
+            case CMD_WHISPER:
+                {
+                    // Payload format: [usernameLen][username][message...]
+                    char username[16];
+                    char message[24];
+                    uint8_t usernameLen = buff[0];
+                    uint8_t i;
+                    
+                    for(i = 0; i < usernameLen && i < 15; i++) {
+                        username[i] = buff[i+1];
+                    }
+                    username[i] = '\0';
+                    
+                    for(i = 0; i < 23 && buff[usernameLen+1+i] != '\0'; i++) {
+                        message[i] = buff[usernameLen+1+i];
+                    }
+                    message[i] = '\0';
+                    
+                    dbg(COMMAND_CHANNEL, "Command Type: Whisper to %s: %s\n", username, message);
+                    signal CommandHandler.whisper(username, message);
+                }
+                break;
+                
+            case CMD_LISTUSR:
+                dbg(COMMAND_CHANNEL, "Command Type: List Users\n");
+                signal CommandHandler.listUsers();
                 break;
 
             default:
