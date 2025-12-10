@@ -75,7 +75,7 @@ class TestSim:
     # Wrapper for the Client test
     # Usage: s.testClient(client_id, dest_id=1, src_port=90, dest_port=80, transfer=100)
     # Added dest=1 default to support legacy calls like s.testClient(4)
-    def testClient(self, address, dest=1, srcPort=90, destPort=80, transfer=150):
+    def testClient(self, address, dest=1, srcPort=90, destPort=80, transfer=100):
         print "Node " + str(address) + " connecting to Node " + str(dest) + \
               " : " + str(destPort) + " transferring " + str(transfer)
         # Arguments: (ClientNodeID, DestNodeID, SrcPort, DestPort, TransferAmount)

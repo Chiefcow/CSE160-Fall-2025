@@ -97,7 +97,7 @@ implementation {
             }
             dbg_clear("transport", "\n");
         } else {
-            dbg("transport", "Out-of-order DATA Seq: %d Expected: %d\n", tcp->seq, sockets[fd].nextExpected);
+            //dbg("transport", "Out-of-order DATA Seq: %d Expected: %d\n", tcp->seq, sockets[fd].nextExpected);
         }
 
         // Always send ACK
@@ -137,7 +137,7 @@ implementation {
             if (sockets[i].flag == 0) {
                 sockets[i].flag = 1;
                 sockets[i].state = CLOSED;
-                sockets[i].RTT = 100;
+                sockets[i].RTT = 100; //RTT IS FIXED at 100 ms because 
                 sockets[i].lastWritten = 0;
                 sockets[i].lastAck = 0;
                 sockets[i].lastSent = 0;
@@ -568,14 +568,14 @@ implementation {
         }
         return SUCCESS;
     }
-
+    //
     event void TransportTimer.fired() {
         uint8_t i;
         for(i=1; i<MAX_NUM_OF_SOCKETS; i++) {
             if(sockets[i].flag) {
                 // Retransmit unacked data
                 if (sockets[i].state == ESTABLISHED && 
-                    sockets[i].lastSent > sockets[i].lastAck &&
+                    sockets[i].lastSent > sockets[i].lastAck + 1 &&
                     !transferComplete[i]) {
                     dbg("transport", "Timeout! Retransmitting from %d\n", sockets[i].lastAck);
                     sockets[i].lastSent = sockets[i].lastAck;

@@ -84,7 +84,7 @@ implementation{
    }
 
    event void CommandHandler.setTestClient() {
-      cmdTestClient(1, 41, 80, 300);
+      cmdTestClient(1, 41, 80, 100);
    }
 
    event void CommandHandler.setAppServer(){}
