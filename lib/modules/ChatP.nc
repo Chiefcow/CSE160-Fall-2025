@@ -2,7 +2,7 @@
 #include "../../includes/socket.h"
 #include "../../includes/packet.h"
 #include "../../includes/protocol.h"
-#include "../../includes/Chat.h"
+#include "../../includes/chat.h"
 
 module ChatP {
     provides interface Chat;
@@ -17,6 +17,7 @@ implementation {
     socket_t serverFd = 0;
     chat_client_t clients[MAX_CLIENTS];
     uint8_t numClients = 0;
+    uint32_t serverTime = 0;  // For timeout tracking
     
     // Client state
     bool isClient = FALSE;
@@ -26,15 +27,30 @@ implementation {
     bool connected = FALSE;
     
     // Buffer for receiving data - per socket for server
-    uint8_t recvBuffer[MAX_CLIENTS][64];
+    uint8_t recvBuffer[MAX_CLIENTS][CHAT_RECV_BUFFER_SIZE];
     uint8_t recvLen[MAX_CLIENTS];
     
     // Client receive buffer
-    uint8_t clientRecvBuf[64];
+    uint8_t clientRecvBuf[CHAT_RECV_BUFFER_SIZE];
     uint8_t clientRecvLen = 0;
     
-    // Pending message to send after connection
-    bool pendingHello = FALSE;
+    // Function prototypes
+    void initClients();
+    void safeCopy(char* dest, char* src, uint8_t maxLen);
+    uint8_t getStringLen(char* str);
+    bool stringEquals(char* a, char* b);
+    bool isValidUsername(char* username);
+    int findClientByUsername(char* username);
+    int findClientBySocket(socket_t fd);
+    int findFreeClientSlot();
+    void cleanupClient(uint8_t clientIdx);
+    void checkClientTimeouts();
+    void sendError(socket_t fd, uint8_t errorCode, char* errorMsg);
+    void broadcastToClients(char* sender, char* message);
+    void sendUserList(uint8_t clientIdx);
+    void sendWhisperTo(char* fromUser, char* toUser, char* message);
+    void processServerMessage(socket_t fd, uint8_t* data, uint8_t len);
+    void processClientMessage(uint8_t* data, uint8_t len);
     
     // Initialize client array
     void initClients() {
@@ -42,29 +58,31 @@ implementation {
         for(i = 0; i < MAX_CLIENTS; i++) {
             clients[i].active = 0;
             clients[i].socketFd = 0;
+            clients[i].lastActivity = 0;
             recvLen[i] = 0;
         }
         numClients = 0;
+        serverTime = 0;
     }
     
-    // Copy string with length limit
-    void strcopy(char* dest, char* src, uint8_t maxLen) {
+    // Safe string copy with bounds checking
+    void safeCopy(char* dest, char* src, uint8_t maxLen) {
         uint8_t i;
-        for(i = 0; i < maxLen && src[i] != '\0'; i++) {
+        for(i = 0; i < maxLen - 1 && src[i] != '\0'; i++) {
             dest[i] = src[i];
         }
         dest[i] = '\0';
     }
     
-    // Get string length
-    uint8_t strlen_local(char* str) {
+    // Get string length safely
+    uint8_t getStringLen(char* str) {
         uint8_t len = 0;
         while(str[len] != '\0' && len < 128) len++;
         return len;
     }
     
     // Compare strings
-    bool streq(char* a, char* b) {
+    bool stringEquals(char* a, char* b) {
         uint8_t i = 0;
         while(a[i] != '\0' && b[i] != '\0') {
             if(a[i] != b[i]) return FALSE;
@@ -73,11 +91,36 @@ implementation {
         return a[i] == b[i];
     }
     
+    // Validate username (not empty, not duplicate, within length)
+    bool isValidUsername(char* username) {
+        uint8_t i, len;
+        
+        // Check for NULL or empty
+        if(username == NULL || username[0] == '\0') {
+            return FALSE;
+        }
+        
+        // Check length
+        len = getStringLen(username);
+        if(len > MAX_USERNAME_LEN) {
+            return FALSE;
+        }
+        
+        // Check for duplicates
+        for(i = 0; i < MAX_CLIENTS; i++) {
+            if(clients[i].active && stringEquals(clients[i].username, username)) {
+                return FALSE;
+            }
+        }
+        
+        return TRUE;
+    }
+    
     // Find client by username
     int findClientByUsername(char* username) {
         uint8_t i;
         for(i = 0; i < MAX_CLIENTS; i++) {
-            if(clients[i].active && streq(clients[i].username, username)) {
+            if(clients[i].active && stringEquals(clients[i].username, username)) {
                 return i;
             }
         }
@@ -95,14 +138,94 @@ implementation {
         return -1;
     }
     
+    // Find free client slot
+    int findFreeClientSlot() {
+        uint8_t i;
+        for(i = 0; i < MAX_CLIENTS; i++) {
+            if(!clients[i].active) {
+                return i;
+            }
+        }
+        return -1;
+    }
+    
+    // Cleanup client slot
+    void cleanupClient(uint8_t clientIdx) {
+        if(clientIdx >= MAX_CLIENTS) return;
+        
+        dbg("transport", "Chat: Cleaning up client slot %d (%s)\n", 
+            clientIdx, clients[clientIdx].username);
+        
+        // Close socket if still open
+        if(clients[clientIdx].socketFd != 0) {
+            call Transport.close(clients[clientIdx].socketFd);
+        }
+        
+        // Clear client data
+        clients[clientIdx].active = 0;
+        clients[clientIdx].socketFd = 0;
+        clients[clientIdx].username[0] = '\0';
+        clients[clientIdx].lastActivity = 0;
+        recvLen[clientIdx] = 0;
+        
+        if(numClients > 0) numClients--;
+    }
+    
+    // Check for inactive clients and timeout
+    void checkClientTimeouts() {
+        uint8_t i;
+        if(!isServer) return;
+        
+        for(i = 0; i < MAX_CLIENTS; i++) {
+            if(clients[i].active) {
+                if((serverTime - clients[i].lastActivity) > CLIENT_TIMEOUT) {
+                    dbg("transport", "Chat: Client %s timed out\n", clients[i].username);
+                    cleanupClient(i);
+                }
+            }
+        }
+    }
+    
+    // Send error message to client
+    void sendError(socket_t fd, uint8_t errorCode, char* errorMsg) {
+        uint8_t buffer[CHAT_SEND_BUFFER_SIZE];
+        uint8_t len = 0;
+        uint8_t i;
+        
+        // Format: "error [code] [message]\r\n"
+        buffer[len++] = 'e';
+        buffer[len++] = 'r';
+        buffer[len++] = 'r';
+        buffer[len++] = 'o';
+        buffer[len++] = 'r';
+        buffer[len++] = ' ';
+        buffer[len++] = '0' + errorCode;
+        buffer[len++] = ' ';
+        
+        for(i = 0; errorMsg[i] != '\0' && len < CHAT_SEND_BUFFER_SIZE - 3; i++) {
+            buffer[len++] = errorMsg[i];
+        }
+        buffer[len++] = '\r';
+        buffer[len++] = '\n';
+        
+        dbg("transport", "Chat: Sending error %d: %s\n", errorCode, errorMsg);
+        call Transport.send(fd, buffer, len);
+    }
+    
     // ==================== SERVER FUNCTIONS ====================
     
     // Broadcast message to all connected clients
     void broadcastToClients(char* sender, char* message) {
         uint8_t i;
-        uint8_t buffer[64];
+        uint8_t buffer[CHAT_SEND_BUFFER_SIZE];
         uint8_t len = 0;
         uint8_t j;
+        
+        // Check message length
+        if(getStringLen(sender) + getStringLen(message) + MAX_BROADCAST_PREFIX > CHAT_SEND_BUFFER_SIZE) {
+            dbg("transport", "Chat: Broadcast message too long\n");
+            return;
+        }
         
         // Format: "msg sender: message\r\n"
         buffer[len++] = 'm';
@@ -110,13 +233,13 @@ implementation {
         buffer[len++] = 'g';
         buffer[len++] = ' ';
         
-        for(j = 0; sender[j] != '\0' && len < 50; j++) {
+        for(j = 0; sender[j] != '\0' && len < CHAT_SEND_BUFFER_SIZE - 4; j++) {
             buffer[len++] = sender[j];
         }
         buffer[len++] = ':';
         buffer[len++] = ' ';
         
-        for(j = 0; message[j] != '\0' && len < 60; j++) {
+        for(j = 0; message[j] != '\0' && len < CHAT_SEND_BUFFER_SIZE - 2; j++) {
             buffer[len++] = message[j];
         }
         buffer[len++] = '\r';
@@ -126,14 +249,16 @@ implementation {
         
         for(i = 0; i < MAX_CLIENTS; i++) {
             if(clients[i].active && clients[i].socketFd != 0) {
-                call Transport.send(clients[i].socketFd, buffer, len);
+                if(call Transport.send(clients[i].socketFd, buffer, len) == 0) {
+                    dbg("transport", "Chat: Failed to send to client %d\n", i);
+                }
             }
         }
     }
     
     // Send user list to requesting client
     void sendUserList(uint8_t clientIdx) {
-        uint8_t buffer[64];
+        uint8_t buffer[CHAT_SEND_BUFFER_SIZE];
         uint8_t len = 0;
         uint8_t i, j;
         bool first = TRUE;
@@ -143,14 +268,14 @@ implementation {
             buffer[len++] = prefix[j];
         }
         
-        for(i = 0; i < MAX_CLIENTS && len < 55; i++) {
+        for(i = 0; i < MAX_CLIENTS && len < CHAT_SEND_BUFFER_SIZE - 3; i++) {
             if(clients[i].active) {
-                if(!first) {
+                if(!first && len < CHAT_SEND_BUFFER_SIZE - 3) {
                     buffer[len++] = ',';
                     buffer[len++] = ' ';
                 }
                 first = FALSE;
-                for(j = 0; clients[i].username[j] != '\0' && len < 55; j++) {
+                for(j = 0; clients[i].username[j] != '\0' && len < CHAT_SEND_BUFFER_SIZE - 3; j++) {
                     buffer[len++] = clients[i].username[j];
                 }
             }
@@ -161,32 +286,48 @@ implementation {
         dbg("transport", "Chat: Sending user list to client %d\n", clientIdx);
         
         if(clients[clientIdx].active && clients[clientIdx].socketFd != 0) {
-            call Transport.send(clients[clientIdx].socketFd, buffer, len);
+            if(call Transport.send(clients[clientIdx].socketFd, buffer, len) == 0) {
+                dbg("transport", "Chat: Failed to send user list\n");
+            }
         }
     }
     
     // Send whisper to specific user
     void sendWhisperTo(char* fromUser, char* toUser, char* message) {
         int idx = findClientByUsername(toUser);
-        uint8_t buffer[64];
+        int fromIdx = findClientByUsername(fromUser);
+        uint8_t buffer[CHAT_SEND_BUFFER_SIZE];
         uint8_t len = 0;
         uint8_t j;
         char* prefix = "whisper ";
         
         if(idx < 0) {
             dbg("transport", "Chat: Whisper target %s not found\n", toUser);
+            // Send error back to sender
+            if(fromIdx >= 0) {
+                sendError(clients[fromIdx].socketFd, CHAT_ERR_USER_NOT_FOUND, "User not found");
+            }
+            return;
+        }
+        
+        // Check message length
+        if(getStringLen(fromUser) + getStringLen(message) + MAX_WHISPER_PREFIX > CHAT_SEND_BUFFER_SIZE) {
+            dbg("transport", "Chat: Whisper message too long\n");
+            if(fromIdx >= 0) {
+                sendError(clients[fromIdx].socketFd, CHAT_ERR_MESSAGE_TOO_LONG, "Message too long");
+            }
             return;
         }
         
         for(j = 0; prefix[j] != '\0'; j++) {
             buffer[len++] = prefix[j];
         }
-        for(j = 0; fromUser[j] != '\0' && len < 45; j++) {
+        for(j = 0; fromUser[j] != '\0' && len < CHAT_SEND_BUFFER_SIZE - 4; j++) {
             buffer[len++] = fromUser[j];
         }
         buffer[len++] = ':';
         buffer[len++] = ' ';
-        for(j = 0; message[j] != '\0' && len < 60; j++) {
+        for(j = 0; message[j] != '\0' && len < CHAT_SEND_BUFFER_SIZE - 2; j++) {
             buffer[len++] = message[j];
         }
         buffer[len++] = '\r';
@@ -195,20 +336,27 @@ implementation {
         dbg("transport", "Chat: Whisper from %s to %s: %s\n", fromUser, toUser, message);
         
         if(clients[idx].active && clients[idx].socketFd != 0) {
-            call Transport.send(clients[idx].socketFd, buffer, len);
+            if(call Transport.send(clients[idx].socketFd, buffer, len) == 0) {
+                dbg("transport", "Chat: Failed to send whisper\n");
+            }
         }
     }
     
     // Process a complete message from client (server side)
     void processServerMessage(socket_t fd, uint8_t* data, uint8_t len) {
         int clientIdx = findClientBySocket(fd);
-        char cmd[16];
-        char arg1[MAX_USERNAME_LEN + 1];
-        char arg2[MAX_MESSAGE_LEN];
+        char cmd[17];  // 16 + null terminator
+        char arg1[MAX_USERNAME_LEN + 2];
+        char arg2[MAX_MESSAGE_LEN + 1];
         uint8_t i = 0, j = 0;
         
-        // Parse command
-        while(i < len && data[i] != ' ' && data[i] != '\r' && j < 15) {
+        // Update activity timestamp
+        if(clientIdx >= 0) {
+            clients[clientIdx].lastActivity = serverTime;
+        }
+        
+        // Parse command - with bounds checking
+        while(i < len && data[i] != ' ' && data[i] != '\r' && j < 16) {
             cmd[j++] = data[i++];
         }
         cmd[j] = '\0';
@@ -234,30 +382,41 @@ implementation {
         dbg("transport", "Chat Server: cmd='%s' arg1='%s' arg2='%s' from fd=%d\n", cmd, arg1, arg2, fd);
         
         // Handle hello command
-        if(streq(cmd, "hello")) {
+        if(stringEquals(cmd, "hello")) {
+            // Validate username
+            if(!isValidUsername(arg1)) {
+                if(findClientByUsername(arg1) >= 0) {
+                    sendError(fd, CHAT_ERR_USERNAME_EXISTS, "Username taken");
+                } else {
+                    sendError(fd, CHAT_ERR_USERNAME_INVALID, "Invalid username");
+                }
+                // Don't accept the client
+                return;
+            }
+            
             if(clientIdx < 0) {
                 // New client - find empty slot
-                for(i = 0; i < MAX_CLIENTS; i++) {
-                    if(!clients[i].active) {
-                        clientIdx = i;
-                        break;
-                    }
+                clientIdx = findFreeClientSlot();
+                if(clientIdx < 0) {
+                    sendError(fd, CHAT_ERR_SERVER_FULL, "Server full");
+                    call Transport.close(fd);
+                    return;
                 }
             }
             
-            if(clientIdx >= 0) {
-                clients[clientIdx].active = 1;
-                clients[clientIdx].socketFd = fd;
-                clients[clientIdx].addr = call Transport.getSocketSrcAddr(fd);
-                strcopy(clients[clientIdx].username, arg1, MAX_USERNAME_LEN);
-                numClients++;
-                dbg("transport", "Chat: User '%s' connected (slot %d, addr %d)\n", 
-                    arg1, clientIdx, clients[clientIdx].addr);
-            }
+            clients[clientIdx].active = 1;
+            clients[clientIdx].socketFd = fd;
+            clients[clientIdx].addr = call Transport.getSocketSrcAddr(fd);
+            clients[clientIdx].lastActivity = serverTime;
+            safeCopy(clients[clientIdx].username, arg1, MAX_USERNAME_LEN + 1);
+            numClients++;
+            dbg("transport", "Chat: User '%s' connected (slot %d, addr %d)\n", 
+                arg1, clientIdx, clients[clientIdx].addr);
         }
         // Handle msg command
-        else if(streq(cmd, "msg")) {
+        else if(stringEquals(cmd, "msg")) {
             if(clientIdx >= 0 && clients[clientIdx].active) {
+                // Combine arg1 and arg2 if needed (full message after "msg ")
                 if(arg2[0] != '\0') {
                     char fullMsg[MAX_MESSAGE_LEN];
                     uint8_t k = 0, m = 0;
@@ -274,18 +433,24 @@ implementation {
                 } else {
                     broadcastToClients(clients[clientIdx].username, arg1);
                 }
+            } else {
+                sendError(fd, CHAT_ERR_NOT_CONNECTED, "Not connected");
             }
         }
         // Handle whisper command
-        else if(streq(cmd, "whisper")) {
+        else if(stringEquals(cmd, "whisper")) {
             if(clientIdx >= 0 && clients[clientIdx].active) {
                 sendWhisperTo(clients[clientIdx].username, arg1, arg2);
+            } else {
+                sendError(fd, CHAT_ERR_NOT_CONNECTED, "Not connected");
             }
         }
         // Handle listusr command
-        else if(streq(cmd, "listusr")) {
+        else if(stringEquals(cmd, "listusr")) {
             if(clientIdx >= 0) {
                 sendUserList(clientIdx);
+            } else {
+                sendError(fd, CHAT_ERR_NOT_CONNECTED, "Not connected");
             }
         }
     }
@@ -312,7 +477,8 @@ implementation {
         call Transport.bind(serverFd, &addr);
         call Transport.listen(serverFd);
         
-        call ChatTimer.startPeriodic(200);
+        // Start timer for client timeout checking
+        call ChatTimer.startPeriodic(CLIENT_CHECK_INTERVAL);
         
         dbg("transport", "Chat: Server listening on port %d\n", CHAT_SERVER_PORT);
         return SUCCESS;
@@ -323,12 +489,24 @@ implementation {
     command error_t Chat.startClient(char* username, uint8_t clientPort) {
         socket_addr_t src, dest;
         
+        // Validate inputs
+        if(username == NULL || username[0] == '\0') {
+            dbg("transport", "Chat: Invalid username\n");
+            return FAIL;
+        }
+        
+        if(clientPort == 0 || clientPort == 255) {
+            dbg("transport", "Chat: Invalid client port\n");
+            return FAIL;
+        }
+        
         dbg("transport", "Chat: Starting client '%s' on port %d\n", username, clientPort);
         
         isClient = TRUE;
-        strcopy(myUsername, username, MAX_USERNAME_LEN);
+        safeCopy(myUsername, username, MAX_USERNAME_LEN + 1);
         myPort = clientPort;
         clientRecvLen = 0;
+        connected = FALSE;
         
         call Transport.start();
         clientFd = call Transport.socket();
@@ -345,22 +523,27 @@ implementation {
         dest.port = CHAT_SERVER_PORT;
         dest.addr = CHAT_SERVER_NODE;
         
-        pendingHello = TRUE;
-        
         call Transport.connect(clientFd, &dest);
         
-        call ChatTimer.startPeriodic(200);
+        // Timer not needed for client (or can be used for keepalive)
+        // call ChatTimer.startPeriodic(CLIENT_CHECK_INTERVAL);
         
         return SUCCESS;
     }
     
     command error_t Chat.sendMessage(char* message) {
-        uint8_t buffer[64];
+        uint8_t buffer[CHAT_SEND_BUFFER_SIZE];
         uint8_t len = 0;
         uint8_t i;
+        uint16_t sent;
         
         if(!connected || clientFd == 0) {
             dbg("transport", "Chat: Cannot send - not connected\n");
+            return FAIL;
+        }
+        
+        if(getStringLen(message) > MAX_MESSAGE_LEN - 8) {
+            dbg("transport", "Chat: Message too long\n");
             return FAIL;
         }
         
@@ -369,51 +552,70 @@ implementation {
         buffer[len++] = 'g';
         buffer[len++] = ' ';
         
-        for(i = 0; message[i] != '\0' && len < 60; i++) {
+        for(i = 0; message[i] != '\0' && len < CHAT_SEND_BUFFER_SIZE - 2; i++) {
             buffer[len++] = message[i];
         }
         buffer[len++] = '\r';
         buffer[len++] = '\n';
         
         dbg("transport", "Chat: Sending message: %s\n", message);
-        call Transport.send(clientFd, buffer, len);
+        sent = call Transport.send(clientFd, buffer, len);
+        
+        if(sent == 0) {
+            dbg("transport", "Chat: Failed to send message\n");
+            return FAIL;
+        }
         
         return SUCCESS;
     }
     
     command error_t Chat.sendWhisper(char* username, char* message) {
-        uint8_t buffer[64];
+        uint8_t buffer[CHAT_SEND_BUFFER_SIZE];
         uint8_t len = 0;
         uint8_t i;
+        uint16_t sent;
         char* prefix = "whisper ";
         
         if(!connected || clientFd == 0) {
+            dbg("transport", "Chat: Cannot send - not connected\n");
+            return FAIL;
+        }
+        
+        if(getStringLen(username) + getStringLen(message) + 12 > CHAT_SEND_BUFFER_SIZE) {
+            dbg("transport", "Chat: Whisper too long\n");
             return FAIL;
         }
         
         for(i = 0; prefix[i] != '\0'; i++) {
             buffer[len++] = prefix[i];
         }
-        for(i = 0; username[i] != '\0' && len < 25; i++) {
+        for(i = 0; username[i] != '\0' && len < CHAT_SEND_BUFFER_SIZE - 3; i++) {
             buffer[len++] = username[i];
         }
         buffer[len++] = ' ';
-        for(i = 0; message[i] != '\0' && len < 60; i++) {
+        for(i = 0; message[i] != '\0' && len < CHAT_SEND_BUFFER_SIZE - 2; i++) {
             buffer[len++] = message[i];
         }
         buffer[len++] = '\r';
         buffer[len++] = '\n';
         
         dbg("transport", "Chat: Sending whisper to %s: %s\n", username, message);
-        call Transport.send(clientFd, buffer, len);
+        sent = call Transport.send(clientFd, buffer, len);
+        
+        if(sent == 0) {
+            dbg("transport", "Chat: Failed to send whisper\n");
+            return FAIL;
+        }
         
         return SUCCESS;
     }
     
     command error_t Chat.requestUserList() {
         uint8_t buffer[16];
+        uint16_t sent;
         
         if(!connected || clientFd == 0) {
+            dbg("transport", "Chat: Cannot send - not connected\n");
             return FAIL;
         }
         
@@ -428,25 +630,32 @@ implementation {
         buffer[8] = '\n';
         
         dbg("transport", "Chat: Requesting user list\n");
-        call Transport.send(clientFd, buffer, 9);
+        sent = call Transport.send(clientFd, buffer, 9);
+        
+        if(sent == 0) {
+            dbg("transport", "Chat: Failed to send user list request\n");
+            return FAIL;
+        }
         
         return SUCCESS;
     }
     
     // Process message received by client
     void processClientMessage(uint8_t* data, uint8_t len) {
-        char cmd[16];
-        char from[MAX_USERNAME_LEN + 1];
-        char message[MAX_MESSAGE_LEN];
+        char cmd[17];
+        char from[MAX_USERNAME_LEN + 2];
+        char message[MAX_MESSAGE_LEN + 1];
         uint8_t i = 0, j = 0;
         
-        while(i < len && data[i] != ' ' && data[i] != '\r' && j < 15) {
+        // Parse command
+        while(i < len && data[i] != ' ' && data[i] != '\r' && j < 16) {
             cmd[j++] = data[i++];
         }
         cmd[j] = '\0';
         
         if(i < len && data[i] == ' ') i++;
         
+        // Parse rest of message
         j = 0;
         while(i < len && data[i] != '\r' && j < MAX_MESSAGE_LEN - 1) {
             message[j++] = data[i++];
@@ -455,7 +664,16 @@ implementation {
         
         dbg("transport", "Chat Client: cmd='%s' content='%s'\n", cmd, message);
         
-        if(streq(cmd, "msg") || streq(cmd, "whisper")) {
+        // Handle error messages
+        if(stringEquals(cmd, "error")) {
+            dbg("transport", "Chat: Error received: %s\n", message);
+            // Could signal error event if needed
+            return;
+        }
+        
+        // Handle broadcast or whisper
+        if(stringEquals(cmd, "msg") || stringEquals(cmd, "whisper")) {
+            // Extract sender name (before colon)
             j = 0;
             i = 0;
             while(message[i] != ':' && message[i] != '\0' && j < MAX_USERNAME_LEN) {
@@ -466,6 +684,7 @@ implementation {
             if(message[i] == ':') i++;
             if(message[i] == ' ') i++;
             
+            // Extract actual message
             j = 0;
             while(message[i] != '\0' && j < MAX_MESSAGE_LEN - 1) {
                 message[j++] = message[i++];
@@ -475,7 +694,8 @@ implementation {
             dbg("transport", "Chat: Message from %s: %s\n", from, message);
             signal Chat.messageReceived(from, message);
         }
-        else if(streq(cmd, "listUsrRply")) {
+        // Handle user list reply
+        else if(stringEquals(cmd, "listUsrRply")) {
             dbg("transport", "Chat: User list: %s\n", message);
             signal Chat.userListReceived(message);
         }
@@ -487,11 +707,13 @@ implementation {
         uint8_t buffer[32];
         uint8_t len = 0;
         uint8_t i;
+        uint16_t sent;
         
-        if(isClient && fd == clientFd) {
+        if(isClient && fd == clientFd && myUsername[0] != '\0') {
             connected = TRUE;
             dbg("transport", "Chat: Client connected to server\n");
             
+            // Send hello message
             buffer[len++] = 'h';
             buffer[len++] = 'e';
             buffer[len++] = 'l';
@@ -505,10 +727,14 @@ implementation {
             buffer[len++] = '\r';
             buffer[len++] = '\n';
             
-            call Transport.send(clientFd, buffer, len);
+            sent = call Transport.send(clientFd, buffer, len);
             
-            pendingHello = FALSE;
-            signal Chat.connected();
+            if(sent > 0) {
+                signal Chat.connected();
+            } else {
+                dbg("transport", "Chat: Failed to send hello message\n");
+                connected = FALSE;
+            }
         }
     }
     
@@ -527,39 +753,39 @@ implementation {
         dbg("transport", "Chat: Data received on socket %d\n", fd);
         
         if(isServer) {
-            // Server: find which client this is or create entry
+            // Server: find which client this is
             clientIdx = findClientBySocket(fd);
             if(clientIdx < 0) {
                 // New connection, find empty slot
-                for(i = 0; i < MAX_CLIENTS; i++) {
-                    if(!clients[i].active) {
-                        clients[i].active = 1;
-                        clients[i].socketFd = fd;
-                        clients[i].addr = call Transport.getSocketSrcAddr(fd);
-                        clients[i].username[0] = '\0';
-                        recvLen[i] = 0;
-                        clientIdx = i;
-                        break;
-                    }
+                clientIdx = findFreeClientSlot();
+                if(clientIdx < 0) {
+                    dbg("transport", "Chat: No free client slots\n");
+                    sendError(fd, CHAT_ERR_SERVER_FULL, "Server full");
+                    call Transport.close(fd);
+                    return;
                 }
+                clients[clientIdx].active = 1;
+                clients[clientIdx].socketFd = fd;
+                clients[clientIdx].addr = call Transport.getSocketSrcAddr(fd);
+                clients[clientIdx].username[0] = '\0';
+                clients[clientIdx].lastActivity = serverTime;
+                recvLen[clientIdx] = 0;
             }
             
-            if(clientIdx >= 0) {
-                // Read available data
-                bytesRead = call Transport.read(fd, tempBuf, 32);
+            // Read available data
+            bytesRead = call Transport.read(fd, tempBuf, 32);
+            
+            // Append to buffer and look for \r\n
+            for(i = 0; i < bytesRead && recvLen[clientIdx] < CHAT_RECV_BUFFER_SIZE - 1; i++) {
+                recvBuffer[clientIdx][recvLen[clientIdx]++] = tempBuf[i];
                 
-                // Append to buffer and look for \r\n
-                for(i = 0; i < bytesRead && recvLen[clientIdx] < 62; i++) {
-                    recvBuffer[clientIdx][recvLen[clientIdx]++] = tempBuf[i];
-                    
-                    // Check for message terminator \r\n
-                    if(recvLen[clientIdx] >= 2 && 
-                       recvBuffer[clientIdx][recvLen[clientIdx]-2] == '\r' &&
-                       recvBuffer[clientIdx][recvLen[clientIdx]-1] == '\n') {
-                        // Complete message received
-                        processServerMessage(fd, recvBuffer[clientIdx], recvLen[clientIdx]);
-                        recvLen[clientIdx] = 0;
-                    }
+                // Check for message terminator \r\n
+                if(recvLen[clientIdx] >= 2 && 
+                   recvBuffer[clientIdx][recvLen[clientIdx]-2] == '\r' &&
+                   recvBuffer[clientIdx][recvLen[clientIdx]-1] == '\n') {
+                    // Complete message received
+                    processServerMessage(fd, recvBuffer[clientIdx], recvLen[clientIdx]);
+                    recvLen[clientIdx] = 0;
                 }
             }
         }
@@ -567,7 +793,7 @@ implementation {
             // Client: read and process
             bytesRead = call Transport.read(fd, tempBuf, 32);
             
-            for(i = 0; i < bytesRead && clientRecvLen < 62; i++) {
+            for(i = 0; i < bytesRead && clientRecvLen < CHAT_RECV_BUFFER_SIZE - 1; i++) {
                 clientRecvBuf[clientRecvLen++] = tempBuf[i];
                 
                 if(clientRecvLen >= 2 && 
@@ -582,7 +808,11 @@ implementation {
     
     // Timer for periodic maintenance
     event void ChatTimer.fired() {
-        // Can be used for timeout handling if needed
+        if(isServer) {
+            serverTime += CLIENT_CHECK_INTERVAL;
+            checkClientTimeouts();
+        }
+        // Could be used for client keepalive if needed
     }
     
     // Default event handlers
