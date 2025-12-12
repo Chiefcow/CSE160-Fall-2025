@@ -10,7 +10,7 @@ interface CommandHandler{
    event void setAppServer();
    event void setAppClient();
 
-   // Project 4 - Chat Commands
+   // Chat Commands
    event void hello(uint8_t clientPort, char* username);
    event void broadcastMsg(char* message);
    event void whisper(char* username, char* message);

@@ -355,7 +355,7 @@ implementation {
             clients[clientIdx].lastActivity = serverTime;
         }
         
-        // Parse command - with bounds checking
+        // Command - with bounds checking
         while(i < len && data[i] != ' ' && data[i] != '\r' && j < 16) {
             cmd[j++] = data[i++];
         }
@@ -484,8 +484,7 @@ implementation {
         return SUCCESS;
     }
     
-    // ==================== CLIENT FUNCTIONS ====================
-    
+
     command error_t Chat.startClient(char* username, uint8_t clientPort) {
         socket_addr_t src, dest;
         
@@ -525,7 +524,7 @@ implementation {
         
         call Transport.connect(clientFd, &dest);
         
-        // Timer not needed for client (or can be used for keepalive)
+        
         // call ChatTimer.startPeriodic(CLIENT_CHECK_INTERVAL);
         
         return SUCCESS;
@@ -701,8 +700,9 @@ implementation {
         }
     }
     
-    // ==================== TRANSPORT EVENTS ====================
-    
+   
+
+    //transpot events
     event void Transport.connectDone(socket_t fd) {
         uint8_t buffer[32];
         uint8_t len = 0;

@@ -24,14 +24,14 @@ implementation {
     void sendNeighborDiscovery() {
         uint8_t payload[PACKET_MAX_PAYLOAD_SIZE];
         
-        // Create neighbor discovery packet
+        // Neighbor discovery packet
         neighborPacket.src = TOS_NODE_ID;
         neighborPacket.dest = AM_BROADCAST_ADDR;
-        neighborPacket.TTL = 1;  // Only 1 hop for neighbor discovery
-        neighborPacket.seq = 0;  // Not used for neighbor discovery
+        neighborPacket.TTL = 1;  
+        neighborPacket.seq = 0;  
         neighborPacket.protocol = PROTOCOL_NEIGHBOR_DISCOVERY;
         
-        // Add node ID to payload for identification
+        //Node ID to payload for identification
         memcpy(payload, "NEIGHBOR_PING", 13);
         memcpy(neighborPacket.payload, payload, PACKET_MAX_PAYLOAD_SIZE);
         
